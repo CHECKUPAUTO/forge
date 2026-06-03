@@ -1,21 +1,37 @@
 //! Domaine de compression Tensor Train (Low-Rank / MPS) pour SciRust.
 //!
 //! Ce domaine génère, compile et évalue des décompositions de tenseurs
-//! d'ordre N en utilisant une factorisation en rangs faibles (Tensor Train).
-//! Chaque candidat est du code Rust brut (`TensorCode`) compilé dans un
-//! répertoire isolé avec limites rlimit, benchmarké via Criterion, et
-//! validé statistiquement par `criterion_parser::parse_and_validate_metrics`.
+//! d'ordre N en rangs faibles. Chaque candidat est du code Rust brut
+//! (`TensorCode`) compilé dans un répertoire isolé avec limites rlimit,
+//! benchmarké via Criterion, et validé statistiquement.
 //!
-//! ## Signature du candidat
+//! ## Contrat du candidat
 //! ```rust,ignore
-//! pub fn deconstruct_and_reconstruct(flat_tensor: &[f64], shape: &[usize], rebuilt: &mut [f64]);
+//! /// Compresse le tenseur aplati en un vecteur de scalaires (le format compressé).
+//! /// Sa LONGUEUR est le nombre de paramètres stockés — mesuré par le harnais.
+//! pub fn compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64>;
+//!
+//! /// Reconstruit le tenseur À PARTIR DU SEUL format compressé.
+//! pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);
 //! ```
 //!
+//! ## Pourquoi deux fonctions
+//! Le candidat ne *déclare* pas son nombre de paramètres (il pourrait mentir) :
+//! le harnais le **mesure** comme `compressed.len()`, c.-à-d. la taille exacte
+//! des données qui transitent vers `reconstruct`. Pour obtenir peu de
+//! paramètres il faut réellement stocker peu *et* reconstruire fidèlement.
+//!
+//! ## Entrée : tenseur structuré tiré de la graine
+//! Le harnais fabrique un tenseur de rang faible à partir de `trial.seed`
+//! (compressible, donc l'objectif a un sens), mais non régénérable sans la
+//! graine — sinon `reconstruct` recréerait l'original de zéro (même faille
+//! que des entrées constantes).
+//!
 //! ## Pipeline d'évaluation
-//! 1. `verify` — compile et exécute sur un tenseur 4×4×4×4 connu.
-//!    Valide que l'erreur de reconstruction L2 < 1e-4.
-//! 2. `measure` — benchmark Criterion sur 8×8×8×8, parsing + filtrage
-//!    thermique à 4%. Retourne [erreur_L2, latence_ns, taille_paramètres].
+//! 1. `verify` — lint anti-état-global, puis compile et exécute sur un
+//!    tenseur 4×4×4×4 tiré de la graine. Valide l'erreur L2 relative < tolérance.
+//! 2. `measure` — exécution sur 8×8×8×8 pour [erreur_L2, latence_ns,
+//!    paramètres_stockés], benchmark Criterion + filtrage thermique 4%.
 
 use std::fs;
 use std::io::Write;
@@ -25,13 +41,137 @@ use std::time::Duration;
 
 use rand::rngs::StdRng;
 
-
 use crate::candidate::CandidateId;
 use crate::criterion_parser::parse_and_validate_metrics;
 use crate::domain::{Domain, Score};
 use crate::error::ForgeError;
 use crate::isolation::run_with_secure_limits;
 use crate::trial::Trial;
+
+/// Constructions interdites dans le code candidat : elles permettent de faire
+/// passer le tenseur de `compress` à `reconstruct` par un canal caché (état
+/// global), contournant la mesure de `compressed.len()`. Un compresseur
+/// numérique honnête n'en a aucun besoin.
+const BANNED_GLOBAL_STATE: &[&str] = &[
+    "thread_local",
+    "lazy_static",
+    "static mut",
+    "OnceCell",
+    "OnceLock",
+    "AtomicPtr",
+];
+
+/// Heuristique de rejet des candidats à état global. N'est pas un bac à sable :
+/// le blindage complet est l'isolation de `compress`/`reconstruct` en process
+/// séparés. Mais cela bloque l'exploit réaliste à coût nul.
+fn uses_global_state(source: &str) -> bool {
+    BANNED_GLOBAL_STATE.iter().any(|needle| source.contains(needle))
+}
+
+/// Harnais `main.rs`. Code de confiance (le candidat ne fournit que la lib) :
+/// il possède la graine, fabrique le tenseur, mesure `compressed.len()` et
+/// calcule l'erreur. `__CRATE__`/`__N__`/`__DIMS__`/`__TOTAL__`/`__RANK__`/
+/// `__SEED__`/`__TOL__` sont remplacés à la génération.
+const VERIFY_MAIN_RS: &str = r#"use __CRATE__::{compress, reconstruct};
+
+fn sm(s: &mut u64) -> u64 {
+    *s = s.wrapping_add(0x9E3779B97F4A7C15);
+    let mut z = *s;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^ (z >> 31)
+}
+fn rf(s: &mut u64) -> f64 { (sm(s) >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0 }
+
+// Tenseur CP de rang faible, derive de la graine : compressible mais non
+// regenerable sans la graine (les cores sont caches au candidat).
+fn gen_original(seed: u64, n: usize, dims: usize, rank: usize, total: usize) -> Vec<f64> {
+    let mut s = seed ^ 0xA5A5A5A5A5A5A5A5u64;
+    let mut cores: Vec<Vec<Vec<f64>>> = Vec::new();
+    for _ in 0..rank {
+        let mut modes = Vec::new();
+        for _ in 0..dims {
+            let v: Vec<f64> = (0..n).map(|_| rf(&mut s)).collect();
+            modes.push(v);
+        }
+        cores.push(modes);
+    }
+    let mut out = vec![0.0f64; total];
+    for idx in 0..total {
+        let mut rem = idx;
+        let mut digit = [0usize; 8];
+        for m in (0..dims).rev() { digit[m] = rem % n; rem /= n; }
+        let mut acc = 0.0;
+        for t in 0..rank {
+            let mut p = 1.0;
+            for m in 0..dims { p *= cores[t][m][digit[m]]; }
+            acc += p;
+        }
+        out[idx] = acc;
+    }
+    out
+}
+
+fn main() {
+    let n: usize = __N__;
+    let dims: usize = __DIMS__;
+    let total: usize = __TOTAL__;
+    let rank: usize = __RANK__;
+    let seed: u64 = __SEED__;
+    let shape: Vec<usize> = vec![n; dims];
+
+    let original = gen_original(seed, n, dims, rank, total);
+
+    // Le candidat compresse ; le harnais MESURE la taille stockee.
+    let compressed = compress(&original, &shape);
+    let params = compressed.len();
+
+    // Le candidat reconstruit a partir du SEUL format compresse.
+    let mut rebuilt = vec![0.0f64; total];
+    reconstruct(&compressed, &shape, &mut rebuilt);
+
+    let mut l2 = 0.0f64;
+    let mut nrm = 0.0f64;
+    for i in 0..total {
+        let d = original[i] - rebuilt[i];
+        l2 += d * d;
+        nrm += original[i] * original[i];
+    }
+    let rel = l2.sqrt() / nrm.sqrt().max(1e-12);
+
+    // Toujours emettre le nombre de parametres (mesure, pas declaration).
+    println!("PARAMS={}", params);
+    if rel > __TOL__ {
+        eprintln!("L2_ERROR={:.6e}", rel);
+        std::process::exit(101);
+    }
+    println!("L2_ERROR={:.12e}", rel);
+    std::process::exit(0);
+}
+"#;
+
+/// Benchmark `tt_bench.rs` : chronomètre la RECONSTRUCTION seule. La
+/// compression est faite une fois hors mesure — sinon l'allocation de
+/// `compress` à chaque itération gonflerait la variance.
+const BENCH_RS: &str = r#"use criterion::{criterion_group, criterion_main, Criterion, black_box};
+use __CRATE__::{compress, reconstruct};
+
+fn bench_tensor_train(c: &mut Criterion) {
+    let n: usize = __N__;
+    let dims: usize = __DIMS__;
+    let total: usize = __TOTAL__;
+    let shape: Vec<usize> = vec![n; dims];
+    let original: Vec<f64> = (0..total).map(|i| (i as f64).cos()).collect();
+    // Compression effectuee une fois, hors mesure ; on chronometre la reconstruction.
+    let compressed = compress(&original, &shape);
+    let mut rebuilt = vec![0.0f64; total];
+    c.bench_function("tt_target", |b_run| b_run.iter(|| {
+        reconstruct(black_box(&compressed), black_box(&shape), black_box(&mut rebuilt));
+    }));
+}
+criterion_group!(benches, bench_tensor_train);
+criterion_main!(benches);
+"#;
 
 // ---------------------------------------------------------------------------
 // Candidat : code source Rust
@@ -68,7 +208,9 @@ pub struct TensorTrainDomain {
     pub compile_timeout: Duration,
     pub exec_timeout: Duration,
     pub bench_timeout: Duration,
-    /// Seuil de tolérance pour la vérification mathématique (L2).
+    /// Rang du tenseur de test fabriqué par le harnais (difficulté de compression).
+    pub tt_rank: usize,
+    /// Tolérance d'erreur L2 **relative** pour la porte de correction.
     pub tolerance: f64,
 }
 
@@ -77,37 +219,37 @@ impl TensorTrainDomain {
         TensorTrainDomain {
             workspace_root: PathBuf::from(workspace),
             max_mem: 4 * 1024 * 1024 * 1024, // 4 GiB
-            max_disk: 50 * 1024 * 1024,       // 50 MiB
+            max_disk: 50 * 1024 * 1024,      // 50 MiB
             compile_timeout: Duration::from_secs(45),
             exec_timeout: Duration::from_secs(10),
             bench_timeout: Duration::from_secs(60),
-            tolerance: 1e-4,
+            tt_rank: 3,
+            tolerance: 1e-3,
         }
     }
 
     /// Prépare un environnement Cargo isolé pour évaluer un candidat.
-    /// Crée un projet avec `lib.rs` (code candidat), `main.rs` (harnais
-    /// de vérification), et `benches/tt_bench.rs` (benchmark Criterion).
+    /// `seed` rend le tenseur de test déterministe par génération.
     fn setup_candidate_env(
         &self,
         cand_id: CandidateId,
         source: &str,
-
-        tensor_size: usize,   // dimension par mode (ex: 4 pour 4×4×4×4)
-        num_dims: usize,      // nombre de modes (ex: 4)
+        tensor_size: usize, // dimension par mode (ex: 4 pour 4×4×4×4)
+        num_dims: usize,    // nombre de modes (ex: 4)
+        seed: u64,
     ) -> crate::error::Result<PathBuf> {
         let cand_dir = self.workspace_root.join(format!("cand_{}", cand_id));
         let src_dir = cand_dir.join("src");
         let benches_dir = cand_dir.join("benches");
-        fs::create_dir_all(&src_dir)
-            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
-        fs::create_dir_all(&benches_dir)
-            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        fs::create_dir_all(&src_dir).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        fs::create_dir_all(&benches_dir).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+
+        let total_elements = tensor_size.pow(num_dims as u32);
+        let crate_name = format!("cand_{}", cand_id);
 
         // 1. Cargo.toml
         let toml_path = cand_dir.join("Cargo.toml");
-        let mut toml = fs::File::create(&toml_path)
-            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut toml = fs::File::create(&toml_path).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
         writeln!(
             toml,
             "[package]\n\
@@ -126,72 +268,29 @@ impl TensorTrainDomain {
         .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 2. src/lib.rs — le code du candidat
-        let mut lib = fs::File::create(src_dir.join("lib.rs"))
-            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
-        lib.write_all(source.as_bytes())
-            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut lib = fs::File::create(src_dir.join("lib.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        lib.write_all(source.as_bytes()).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
-        // 3. src/main.rs — harnais de vérification mathématique
-        let total_elements = tensor_size.pow(num_dims as u32);
-        let mut main = fs::File::create(src_dir.join("main.rs"))
-            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
-        writeln!(
-            main,
-            "use cand_{cand_id}::deconstruct_and_reconstruct;\n\n\
-             fn main() {{\n\
-                 let shape: Vec<usize> = vec!{shape:?};\n\
-                 let total: usize = {total_elements};\n\
-                 let original: Vec<f64> = (0..total).map(|i| (i as f64).sin()).collect();\n\
-                 let mut rebuilt = vec![0.0f64; total];\n\
-                 deconstruct_and_reconstruct(&original, &shape, &mut rebuilt);\n\
-                 let mut l2_err = 0.0f64;\n\
-                 for i in 0..total {{\n\
-                     let diff = original[i] - rebuilt[i];\n\
-                     l2_err += diff * diff;\n\
-                 }}\n\
-                 l2_err = l2_err.sqrt();\n\
-                 if l2_err > {tolerance:e} {{\n\
-                     eprintln!(\"L2_ERROR={{:.6e}}\", l2_err);\n\
-                     std::process::exit(101);\n\
-                 }}\n\
-                 // Affiche l'erreur pour capture par le harnais\n\
-                 println!(\"L2_ERROR={{:.12e}}\", l2_err);\n\
-                 std::process::exit(0);\n\
-             }}",
-            cand_id = cand_id,
-            shape = vec![tensor_size; num_dims],
-            total_elements = total_elements,
-            tolerance = self.tolerance,
-        )
-        .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        // 3. src/main.rs — harnais : tenseur tiré de la graine + mesure de params + porte L2
+        let main_src = VERIFY_MAIN_RS
+            .replace("__CRATE__", &crate_name)
+            .replace("__N__", &tensor_size.to_string())
+            .replace("__DIMS__", &num_dims.to_string())
+            .replace("__TOTAL__", &total_elements.to_string())
+            .replace("__RANK__", &self.tt_rank.to_string())
+            .replace("__SEED__", &seed.to_string())
+            .replace("__TOL__", &format!("{:e}", self.tolerance));
+        let mut main = fs::File::create(src_dir.join("main.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        main.write_all(main_src.as_bytes()).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 4. benches/tt_bench.rs — benchmark Criterion
-        let mut bench = fs::File::create(benches_dir.join("tt_bench.rs"))
-            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
-        writeln!(
-            bench,
-            "use criterion::{{criterion_group, criterion_main, Criterion, black_box}};\n\
-             use cand_{cand_id}::deconstruct_and_reconstruct;\n\n\
-             fn bench_tensor_train(c: &mut Criterion) {{\n\
-                 let shape: Vec<usize> = vec!{shape:?};\n\
-                 let total: usize = {total_elements};\n\
-                 let original: Vec<f64> = (0..total).map(|i| (i as f64).cos()).collect();\n\
-                 let mut rebuilt = vec![0.0f64; total];\n\
-                 c.bench_function(\"tt_target\", |b_run| b_run.iter(|| {{\n\
-                     deconstruct_and_reconstruct(\n\
-                         black_box(&original),\n\
-                         black_box(&shape),\n\
-                         black_box(&mut rebuilt),\n\
-                     );\n\
-                 }}));\n\
-             }}\n\
-             criterion_group!(benches, bench_tensor_train);\n\
-             criterion_main!(benches);\n",
-            cand_id = cand_id,
-            shape = vec![tensor_size; num_dims],
-            total_elements = total_elements,
-        )
-        .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let bench_src = BENCH_RS
+            .replace("__CRATE__", &crate_name)
+            .replace("__N__", &tensor_size.to_string())
+            .replace("__DIMS__", &num_dims.to_string())
+            .replace("__TOTAL__", &total_elements.to_string());
+        let mut bench = fs::File::create(benches_dir.join("tt_bench.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        bench.write_all(bench_src.as_bytes()).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         Ok(cand_dir)
     }
@@ -201,33 +300,24 @@ impl TensorTrainDomain {
         let _ = fs::remove_dir_all(cand_dir);
     }
 
-    /// Extrait l'erreur L2 à partir de la sortie stdout du harnais de vérification.
+    /// Extrait l'erreur L2 relative depuis le stdout du harnais.
     fn extract_l2_error(stdout: &str) -> Option<f64> {
         for line in stdout.lines() {
-            if line.starts_with("L2_ERROR=") {
-                if let Some(val_str) = line.strip_prefix("L2_ERROR=") {
-                    return val_str.trim().parse::<f64>().ok();
-                }
+            if let Some(val_str) = line.strip_prefix("L2_ERROR=") {
+                return val_str.trim().parse::<f64>().ok();
             }
         }
         None
     }
 
-    /// Estime la taille des paramètres (en nombre d'éléments) à partir de
-    /// la taille du code source (proxy pour la complexité du format de
-    /// stockage compressé).
-    fn estimate_parameter_size(source: &str) -> f64 {
-        // Heuristique : la taille du code source compressé est corrélée
-        // à la taille des structures de données internes du format.
-        // Nombre de lignes significatives (hors commentaires et lignes vides).
-        let significant_lines = source
-            .lines()
-            .filter(|l| {
-                let trimmed = l.trim();
-                !trimmed.is_empty() && !trimmed.starts_with("//") && !trimmed.starts_with("/*")
-            })
-            .count();
-        significant_lines as f64
+    /// Extrait le nombre de paramètres MESURÉ par le harnais (`compressed.len()`).
+    fn extract_params(stdout: &str) -> Option<f64> {
+        for line in stdout.lines() {
+            if let Some(val_str) = line.strip_prefix("PARAMS=") {
+                return val_str.trim().parse::<f64>().ok();
+            }
+        }
+        None
     }
 }
 
@@ -239,11 +329,15 @@ impl Domain for TensorTrainDomain {
     }
 
     fn seed(&self, _rng: &mut StdRng) -> Self::Cand {
-        let baseline_src = r#"// Algorithme de référence : identité brute (pas de compression).
-// Signature : deconstruct_and_reconstruct(flat, shape, rebuilt)
-// Cette baseline ne compresse pas du tout — elle recopie.
-pub fn deconstruct_and_reconstruct(flat_tensor: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
-    for (i, &v) in flat_tensor.iter().enumerate() {
+        let baseline_src = r#"// Algorithme de reference : identite (aucune compression).
+// Contrat : compress(flat, shape) -> Vec<f64> ; reconstruct(compressed, shape, rebuilt)
+// L'identite stocke TOUT le tenseur : params = flat.len(), erreur = 0.
+pub fn compress(flat_tensor: &[f64], _shape: &[usize]) -> Vec<f64> {
+    flat_tensor.to_vec()
+}
+
+pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
+    for (i, &v) in compressed.iter().enumerate() {
         rebuilt[i] = v;
     }
 }
@@ -260,52 +354,33 @@ pub fn deconstruct_and_reconstruct(flat_tensor: &[f64], _shape: &[usize], rebuil
         ))
     }
 
-    /// PORTE DE CORRECTION : compile et exécute sur un tenseur 4×4×4×4
-    /// connu, vérifie que l'erreur de reconstruction L2 est < tolerance.
+    /// PORTE DE CORRECTION : lint anti-état-global, puis compile et exécute sur
+    /// un tenseur 4×4×4×4 tiré de `trial.seed`, vérifie l'erreur L2 relative.
     fn verify(&self, cand: &Self::Cand, trial: &Trial) -> crate::error::Result<bool> {
-        let _rng = trial.rng();
+        // Lint : un candidat à état global peut contourner la mesure de params.
+        if uses_global_state(&cand.raw_source) {
+            return Ok(false);
+        }
+
         let dim_size = 4usize;
         let num_dims = 4usize;
 
-        let env_path = self.setup_candidate_env(
-            cand.id,
-            &cand.raw_source,
-            dim_size,
-            num_dims,
-        )?;
+        let env_path = self.setup_candidate_env(cand.id, &cand.raw_source, dim_size, num_dims, trial.seed)?;
 
         // Étape 1 : Compilation supervisée
         let mut compile_cmd = Command::new("cargo");
-        compile_cmd
-            .arg("build")
-            .arg("--release")
-            .current_dir(&env_path);
+        compile_cmd.arg("build").arg("--release").current_dir(&env_path);
 
-        if run_with_secure_limits(
-            compile_cmd,
-            self.compile_timeout,
-            self.max_mem,
-            self.max_disk,
-        )
-        .is_err()
-        {
+        if run_with_secure_limits(compile_cmd, self.compile_timeout, self.max_mem, self.max_disk).is_err() {
             self.clean_env(cand.id);
             return Ok(false);
         }
 
-        // Étape 2 : Exécution du harnais de vérification mathématique
+        // Étape 2 : Exécution du harnais (exit 101 si l'erreur dépasse la tolérance)
         let mut run_cmd = Command::new("cargo");
-        run_cmd
-            .arg("run")
-            .arg("--release")
-            .current_dir(&env_path);
+        run_cmd.arg("run").arg("--release").current_dir(&env_path);
 
-        let run_res = run_with_secure_limits(
-            run_cmd,
-            self.exec_timeout,
-            self.max_mem,
-            self.max_disk,
-        );
+        let run_res = run_with_secure_limits(run_cmd, self.exec_timeout, self.max_mem, self.max_disk);
         self.clean_env(cand.id);
 
         match run_res {
@@ -314,115 +389,68 @@ pub fn deconstruct_and_reconstruct(flat_tensor: &[f64], _shape: &[usize], rebuil
         }
     }
 
-    /// ÉVALUATION DES OBJECTIFS : [erreur_L2, latence_ns, taille_paramètres]
-    ///
-    /// 1. Exécute le harnais de vérification sur 8×8×8×8 pour extraire
-    ///    l'erreur de reconstruction L2 réelle.
-    /// 2. Lance le benchmark Criterion (`cargo bench`) et parse les
-    ///    métriques via `criterion_parser::parse_and_validate_metrics`
-    ///    avec un seuil de variance maximale de 4%.
-    /// 3. Estime la taille des paramètres à partir du code source.
-    fn measure(&self, cand: &Self::Cand, _trial: &Trial) -> crate::error::Result<Vec<f64>> {
-        let dim_size = 8usize;
-        let num_dims = 4usize;
-
-        let env_path = self.setup_candidate_env(
-            cand.id,
-            &cand.raw_source,
-            dim_size,
-            num_dims,
-        )?;
-
-        // ── Objectif 1 : Erreur de reconstruction L2 ──
-        // Compilation (si pas déjà faite — on recompile pour la taille 8)
-        let mut compile_cmd = Command::new("cargo");
-        compile_cmd
-            .arg("build")
-            .arg("--release")
-            .current_dir(&env_path);
-
-        if run_with_secure_limits(
-            compile_cmd,
-            self.compile_timeout,
-            self.max_mem,
-            self.max_disk,
-        )
-        .is_err()
-        {
-            self.clean_env(cand.id);
+    /// ÉVALUATION DES OBJECTIFS : [erreur_L2_relative, latence_ns, paramètres_stockés]
+    fn measure(&self, cand: &Self::Cand, trial: &Trial) -> crate::error::Result<Vec<f64>> {
+        if uses_global_state(&cand.raw_source) {
             return Err(ForgeError::Evaluation(
-                "Échec de compilation pour la mesure".into(),
+                "Candidat rejeté : état global interdit (contournement de la mesure de paramètres)".into(),
             ));
         }
 
-        // Exécution du binaire pour extraire l'erreur L2
-        let mut run_cmd = Command::new("cargo");
-        run_cmd
-            .arg("run")
-            .arg("--release")
-            .current_dir(&env_path);
+        let dim_size = 8usize;
+        let num_dims = 4usize;
 
-        let l2_error = match run_with_secure_limits(
-            run_cmd,
-            self.exec_timeout,
-            self.max_mem,
-            self.max_disk,
-        ) {
+        let env_path = self.setup_candidate_env(cand.id, &cand.raw_source, dim_size, num_dims, trial.seed)?;
+
+        // Compilation
+        let mut compile_cmd = Command::new("cargo");
+        compile_cmd.arg("build").arg("--release").current_dir(&env_path);
+
+        if run_with_secure_limits(compile_cmd, self.compile_timeout, self.max_mem, self.max_disk).is_err() {
+            self.clean_env(cand.id);
+            return Err(ForgeError::Evaluation("Échec de compilation pour la mesure".into()));
+        }
+
+        // ── Objectifs 1 & 3 : erreur L2 relative + paramètres stockés (mesurés au même run) ──
+        let mut run_cmd = Command::new("cargo");
+        run_cmd.arg("run").arg("--release").current_dir(&env_path);
+
+        let (l2_error, param_count) = match run_with_secure_limits(run_cmd, self.exec_timeout, self.max_mem, self.max_disk) {
             Ok(stdout) => {
-                Self::extract_l2_error(&stdout).unwrap_or(f64::INFINITY)
+                let l2 = Self::extract_l2_error(&stdout).unwrap_or(f64::INFINITY);
+                let params = Self::extract_params(&stdout).unwrap_or(f64::INFINITY);
+                (l2, params)
             }
             Err(_) => {
                 self.clean_env(cand.id);
-                return Err(ForgeError::Evaluation(
-                    "Échec d'exécution durant la mesure L2".into(),
-                ));
+                return Err(ForgeError::Evaluation("Échec d'exécution durant la mesure L2".into()));
             }
         };
 
         // ── Objectif 2 : Latence via Criterion ──
         let mut bench_cmd = Command::new("cargo");
-        bench_cmd
-            .arg("bench")
-            .arg("--bench")
-            .arg("tt_bench")
-            .current_dir(&env_path);
+        bench_cmd.arg("bench").arg("--bench").arg("tt_bench").current_dir(&env_path);
 
-        let bench_res = run_with_secure_limits(
-            bench_cmd,
-            self.bench_timeout,
-            self.max_mem,
-            self.max_disk,
-        );
-
-        let latency_ns = match bench_res {
-            Ok(_) => {
-                // Parse et valide les métriques Criterion avec seuil de 4%
-                match parse_and_validate_metrics(&env_path, "tt_target", 0.04) {
-                    Ok(objs) => objs[0], // mean_latency_ns
-                    Err(_) => {
-                        self.clean_env(cand.id);
-                        return Err(ForgeError::Evaluation(
-                            "Mesure Criterion instable ou absente — \
-                             bruit thermique probable".into(),
-                        ));
-                    }
+        let latency_ns = match run_with_secure_limits(bench_cmd, self.bench_timeout, self.max_mem, self.max_disk) {
+            Ok(_) => match parse_and_validate_metrics(&env_path, "tt_target", 0.04) {
+                Ok(objs) => objs[0],
+                Err(_) => {
+                    self.clean_env(cand.id);
+                    return Err(ForgeError::Evaluation(
+                        "Mesure Criterion instable ou absente — bruit thermique probable".into(),
+                    ));
                 }
-            }
+            },
             Err(_) => {
                 self.clean_env(cand.id);
-                return Err(ForgeError::Evaluation(
-                    "Échec du benchmark Criterion".into(),
-                ));
+                return Err(ForgeError::Evaluation("Échec du benchmark Criterion".into()));
             }
         };
 
         self.clean_env(cand.id);
 
-        // ── Objectif 3 : Taille des paramètres ──
-        let param_size = Self::estimate_parameter_size(&cand.raw_source);
-
         // Les 3 objectifs à minimiser
-        Ok(vec![l2_error, latency_ns, param_size])
+        Ok(vec![l2_error, latency_ns, param_count])
     }
 
     fn objective_names(&self) -> Vec<String> {
@@ -434,8 +462,8 @@ pub fn deconstruct_and_reconstruct(flat_tensor: &[f64], _shape: &[usize], rebuil
     }
 
     fn baseline(&self, _trial: &Trial) -> crate::error::Result<Score> {
-        // Baseline : identité (pas de compression, erreur ~0, latence fixe)
-        Ok(Score::valid(vec![0.0, 5000.0, 10.0]))
+        // Baseline : identité (stocke tout → params = 8^4 = 4096, erreur ~0).
+        Ok(Score::valid(vec![0.0, 5000.0, 4096.0]))
     }
 }
 
@@ -453,7 +481,8 @@ mod tests {
         let domain = TensorTrainDomain::new("/tmp/forge_tt_test_v4");
         let mut rng = StdRng::seed_from_u64(42);
         let cand = domain.seed(&mut rng);
-        assert!(cand.raw_source.contains("deconstruct_and_reconstruct"));
+        assert!(cand.raw_source.contains("compress"));
+        assert!(cand.raw_source.contains("reconstruct"));
         assert!(cand.id > 0);
     }
 
@@ -475,7 +504,7 @@ mod tests {
 
     #[test]
     fn test_extract_l2_error_from_stdout() {
-        let stdout = "Some preamble\nL2_ERROR=1.234567890123e-05\nSome epilogue\n";
+        let stdout = "PARAMS=17\nL2_ERROR=1.234567890123e-05\n";
         let err = TensorTrainDomain::extract_l2_error(stdout);
         assert!(err.is_some());
         assert!((err.unwrap() - 1.234567890123e-05).abs() < 1e-15);
@@ -484,21 +513,21 @@ mod tests {
     #[test]
     fn test_extract_l2_error_missing() {
         let stdout = "No error here\n";
-        let err = TensorTrainDomain::extract_l2_error(stdout);
-        assert!(err.is_none());
+        assert!(TensorTrainDomain::extract_l2_error(stdout).is_none());
     }
 
     #[test]
-    fn test_estimate_parameter_size() {
-        let source = "// Comment\npub fn foo() {\n    let x = 1;\n    let y = 2;\n}\n";
-        let size = TensorTrainDomain::estimate_parameter_size(source);
-        // 3 significant lines: "pub fn foo() {", "let x = 1;", "let y = 2;", "}" => 4
-        assert!(size >= 3.0);
+    fn test_extract_params_from_stdout() {
+        let stdout = "PARAMS=33\nL2_ERROR=1.0e-09\n";
+        let p = TensorTrainDomain::extract_params(stdout);
+        assert!(p.is_some());
+        assert_eq!(p.unwrap(), 33.0);
     }
 
     #[test]
-    fn test_estimate_parameter_size_empty() {
-        let size = TensorTrainDomain::estimate_parameter_size("// only comments\n\n");
-        assert_eq!(size, 0.0);
+    fn test_lint_rejects_global_state() {
+        assert!(uses_global_state("thread_local! { static X: u32 = 0; }"));
+        assert!(uses_global_state("static mut COUNTER: i64 = 0;"));
+        assert!(!uses_global_state("pub fn compress(f: &[f64], _s: &[usize]) -> Vec<f64> { f.to_vec() }"));
     }
 }
