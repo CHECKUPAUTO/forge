@@ -1,0 +1,18 @@
+[package]
+name = "forge-worker"
+version = "0.1.0"
+edition = "2021"
+description = "Worker d'évaluation pour forge-core — écoute TCP, évalue les candidats avec isolation rlimit."
+
+[[bin]]
+name = "forge-worker"
+path = "src/main.rs"
+
+[dependencies]
+forge-core = { path = "../forge-core" }
+tokio = { version = "1", features = ["full"] }
+bincode = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[workspace]

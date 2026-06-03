@@ -1,0 +1,23 @@
+[package]
+name = "forge-core"
+version = "0.1.0"
+edition = "2021"
+description = "Moteur de recherche evolutionnaire d'algorithmes pilote par execution. Terrain d'execution: scirust."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rand = "0.8"
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = { version = "2", features = ["json"], optional = true }
+rlimit = "0.11"
+sled = "0.34"
+bincode = "1"
+
+[features]
+default = []
+# Active le generateur de candidats par LLM (client Ollama bloquant).
+llm = ["dep:ureq"]
+
+[workspace]

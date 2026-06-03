@@ -1,0 +1,91 @@
+{
+  "generation": 4,
+  "config": {
+    "generations": 5,
+    "population": 20,
+    "survivors": 5,
+    "base_seed": 123
+  },
+  "archive": [
+    {
+      "cand": {
+        "ranks": [
+          6,
+          8,
+          8
+        ]
+      },
+      "score": {
+        "objectives": [
+          0.09523809523809527,
+          0.1328125
+        ],
+        "valid": true
+      }
+    },
+    {
+      "cand": {
+        "ranks": [
+          1,
+          1,
+          4
+        ]
+      },
+      "score": {
+        "objectives": [
+          0.8571428571428571,
+          0.005859375
+        ],
+        "valid": true
+      }
+    },
+    {
+      "cand": {
+        "ranks": [
+          2,
+          8,
+          8
+        ]
+      },
+      "score": {
+        "objectives": [
+          0.2857142857142857,
+          0.06640625
+        ],
+        "valid": true
+      }
+    },
+    {
+      "cand": {
+        "ranks": [
+          5,
+          8,
+          8
+        ]
+      },
+      "score": {
+        "objectives": [
+          0.14285714285714285,
+          0.1162109375
+        ],
+        "valid": true
+      }
+    },
+    {
+      "cand": {
+        "ranks": [
+          2,
+          1,
+          8
+        ]
+      },
+      "score": {
+        "objectives": [
+          0.6190476190476192,
+          0.01171875
+        ],
+        "valid": true
+      }
+    }
+  ]
+}

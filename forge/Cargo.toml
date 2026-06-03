@@ -1,0 +1,12 @@
+[package]
+name = "forge"
+version = "0.1.0"
+edition = "2021"
+description = "Binaire de demonstration: prouve que la boucle du moteur se ferme et generalise."
+
+[dependencies]
+forge-core = { path = "../forge-core" }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+[workspace]

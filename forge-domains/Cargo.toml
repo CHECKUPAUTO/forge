@@ -1,0 +1,19 @@
+[package]
+name = "forge-domains"
+version = "0.1.0"
+edition = "2021"
+description = "Domaines d'évaluation pour forge-core : compression Tensor Train, quantification de kernels, et autres terrains scirust."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+forge-core = { path = "../forge-core" }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+
+[workspace]
+
+[[example]]
+name = "train_tt"
+path = "examples/train_tt.rs"
