@@ -54,8 +54,8 @@ impl LlmMutator {
         let mut prompt = format!(
             "Voici un algorithme Rust performant a optimiser :\n\n\
              ```rust\n{parent_code}\n```\n\n\
-             Propose une version modifiee et optimisee de la fonction. \
-             Respecte imperativement la signature originale. \
+             Propose une version modifiee et optimisee du code, en conservant toutes les fonctions publiques. \
+             Respecte imperativement les signatures publiques existantes. \
              Renvoie UNIQUEMENT le code Rust valide enveloppe dans un bloc \
              markdown ```rust ... ```.",
         );
