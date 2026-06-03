@@ -43,7 +43,7 @@ const VERIFY_MAIN_CU: &str = r#"#include <cuda_runtime.h>
 #include <cstdint>
 
 // Kernel externe defini dans kernel.cu
-__global__ void compute_kernel(double* c, const double* a, const double* b, int n);
+extern "C" __global__ void compute_kernel(double* c, const double* a, const double* b, int n);
 
 static uint64_t rng_next(uint64_t* s) {
     *s += 0x9E3779B97F4A7C15ULL;
@@ -295,7 +295,7 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         let output_bin = env_path.join("cuda_verify");
         let mut comp_cmd = Command::new("nvcc");
         comp_cmd
-            .arg("-O3")
+            .arg("-O3").arg("-arch=native")
             .arg("--ptxas-options=-v")
             .arg("-o")
             .arg(&output_bin)
@@ -330,7 +330,7 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         let output_bin = env_path.join("cuda_verify");
         let mut comp_cmd = Command::new("nvcc");
         comp_cmd
-            .arg("-O3")
+            .arg("-O3").arg("-arch=native")
             .arg("--ptxas-options=-v")
             .arg("-o")
             .arg(&output_bin)
