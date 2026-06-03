@@ -1,3 +1,8 @@
+<img width="1024" height="572" alt="image" src="https://github.com/user-attachments/assets/3c1385de-87d3-4d5b-853c-82dee104635c" />
+
+
+
+
 # Forge
 
 Moteur de recherche évolutionnaire d'algorithmes piloté par exécution.
