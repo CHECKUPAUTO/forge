@@ -22,6 +22,7 @@ pub struct LlmMutator {
     endpoint: String,
     model_name: String,
     timeout_secs: u64,
+    objective: String,
 }
 
 impl LlmMutator {
@@ -35,12 +36,18 @@ impl LlmMutator {
             endpoint: endpoint.to_string(),
             model_name: model_name.to_string(),
             timeout_secs: 60,
+            objective: String::new(),
         }
     }
 
     /// Définit le timeout des appels HTTP.
     pub fn with_timeout(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
+        self
+    }
+
+    pub fn with_objective(mut self, objective: &str) -> Self {
+        self.objective = objective.to_string();
         self
     }
 
@@ -85,6 +92,9 @@ impl LlmMutator {
             ));
         }
 
+        if !self.objective.is_empty() {
+            prompt = format!("OBJECTIF (CRITIQUE) : {}\n\n{}", self.objective, prompt);
+        }
         let body = ureq::json!({
             "model": self.model_name,
             "prompt": prompt,

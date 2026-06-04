@@ -236,7 +236,49 @@ impl TensorTrainDomain {
     /// `seed` rend le tenseur de test déterministe par génération.
     #[cfg(feature = "llm")]
     pub fn with_llm(mut self, endpoint: &str, model: &str) -> Self {
-        self.llm = Some(crate::mutation::llm_mutator::LlmMutator::new(endpoint, model).with_timeout(600));
+        const OBJ: &str = r#"OBJECTIF: COMPRESSION. compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64> doit renvoyer le MOINS de valeurs possible -- c'est le score `parameters_count`, plus petit = meilleur. reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]) reconstruit le tenseur dans `rebuilt`. Le tenseur d'entree est de RANG FAIBLE (somme de quelques produits exterieurs), donc son depliage matriciel est de rang faible et une SVD tronquee le compresse fortement sans perte. Stocker tous les elements (params = taille totale) est le PIRE score. Garde l'erreur L2 relative sous 1e-3.
+
+DEPENDANCES DISPONIBLES (AUCUNE autre): std, le crate `rand` 0.8, et le crate `nalgebra` 0.33. Utilise `nalgebra::DMatrix` et `.svd(true, true)` (champs `.u`, `.v_t`, `.singular_values`). N'utilise NI ndarray NI ndarray_stats: ils ne sont PAS disponibles, le code ne compilera pas.
+
+EXEMPLE de solution CORRECTE qui compresse (~4x, reconstruction exacte). Inspire-toi en -- tu peux ameliorer le choix du rang ou le depliage -- mais garde EXACTEMENT ces deux signatures publiques:
+
+use nalgebra::DMatrix;
+
+pub fn compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64> {
+    let n0 = shape[0];
+    let ncols: usize = shape[1..].iter().product();
+    let m = DMatrix::from_row_slice(n0, ncols, flat_tensor);
+    let svd = m.svd(true, true);
+    let s = &svd.singular_values;
+    let u = svd.u.as_ref().unwrap();
+    let vt = svd.v_t.as_ref().unwrap();
+    let smax = s.iter().cloned().fold(0.0_f64, f64::max);
+    let tol = 1e-9_f64.max(smax * 1e-7);
+    let mut r = 0usize;
+    for i in 0..s.len() { if s[i] > tol { r += 1; } }
+    if r == 0 { r = 1; }
+    let mut out = Vec::with_capacity(1 + r * (n0 + ncols + 1));
+    out.push(r as f64);
+    for j in 0..r { for i in 0..n0 { out.push(u[(i, j)]); } }
+    for j in 0..r { out.push(s[j]); }
+    for j in 0..r { for c in 0..ncols { out.push(vt[(j, c)]); } }
+    out
+}
+
+pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]) {
+    let n0 = shape[0];
+    let ncols: usize = shape[1..].iter().product();
+    let r = compressed[0] as usize;
+    let mut idx = 1usize;
+    let u = DMatrix::from_column_slice(n0, r, &compressed[idx..idx + n0 * r]); idx += n0 * r;
+    let s: Vec<f64> = compressed[idx..idx + r].to_vec(); idx += r;
+    let vt = DMatrix::from_row_slice(r, ncols, &compressed[idx..idx + r * ncols]);
+    let mut us = u.clone();
+    for j in 0..r { for i in 0..n0 { us[(i, j)] *= s[j]; } }
+    let m = us * vt;
+    for i in 0..n0 { for c in 0..ncols { rebuilt[i * ncols + c] = m[(i, c)]; } }
+}"#;
+        self.llm = Some(crate::mutation::llm_mutator::LlmMutator::new(endpoint, model).with_timeout(600).with_objective(OBJ));
         self
     }
 
@@ -269,7 +311,8 @@ impl TensorTrainDomain {
              version = \"0.1.0\"\n\
              edition = \"2021\"\n\n\
              [dependencies]\n\
-             rand = \"0.8\"\n\n\
+             rand = \"0.8\"\n\
+             nalgebra = \"0.33\"\n\n\
              [dev-dependencies]\n\
              criterion = \"0.5\"\n\n\
              [[bench]]\n\
@@ -365,9 +408,19 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
             if let Some(ref llm) = self.llm {
                 use crate::candidate::Candidate as _;
                 let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
-                let new_src = llm.mutate_with_feedback(&parent_src, None)?;
+                let new_src = match llm.mutate_with_feedback(&parent_src, None) {
+                    Ok(src) => src,
+                    Err(e) => {
+                        if std::env::var("FORGE_VERBOSE").is_ok() {
+                            eprintln!("[forge:mutate] echec LLM ({e}) -> repli sur le parent");
+                        }
+                        parent_src.clone()
+                    }
+                };
                 if std::env::var("FORGE_VERBOSE").is_ok() {
                     eprintln!("[forge:mutate] LLM -> {} octets de source", new_src.len());
+                    let _ = std::fs::create_dir_all("/tmp/forge_children");
+                    let _ = std::fs::write(format!("/tmp/forge_children/child_{}.rs", crate::fnv1a(&new_src)), &new_src);
                 }
                 let id = crate::fnv1a(&new_src);
                 return Ok(TensorCode { raw_source: new_src, id });
