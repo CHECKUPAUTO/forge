@@ -212,6 +212,8 @@ pub struct TensorTrainDomain {
     pub tt_rank: usize,
     /// Tolérance d'erreur L2 **relative** pour la porte de correction.
     pub tolerance: f64,
+    #[cfg(feature = "llm")]
+    pub llm: Option<crate::mutation::llm_mutator::LlmMutator>,
 }
 
 impl TensorTrainDomain {
@@ -225,11 +227,19 @@ impl TensorTrainDomain {
             bench_timeout: Duration::from_secs(60),
             tt_rank: 3,
             tolerance: 1e-3,
+            #[cfg(feature = "llm")]
+            llm: None,
         }
     }
 
     /// Prépare un environnement Cargo isolé pour évaluer un candidat.
     /// `seed` rend le tenseur de test déterministe par génération.
+    #[cfg(feature = "llm")]
+    pub fn with_llm(mut self, endpoint: &str, model: &str) -> Self {
+        self.llm = Some(crate::mutation::llm_mutator::LlmMutator::new(endpoint, model).with_timeout(600));
+        self
+    }
+
     fn setup_candidate_env(
         &self,
         cand_id: CandidateId,
@@ -238,7 +248,9 @@ impl TensorTrainDomain {
         num_dims: usize,    // nombre de modes (ex: 4)
         seed: u64,
     ) -> crate::error::Result<PathBuf> {
-        let cand_dir = self.workspace_root.join(format!("cand_{}", cand_id));
+        static ENV_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nonce = ENV_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let cand_dir = self.workspace_root.join(format!("cand_{}_{}", cand_id, nonce));
         let src_dir = cand_dir.join("src");
         let benches_dir = cand_dir.join("benches");
         fs::create_dir_all(&src_dir).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
@@ -295,9 +307,8 @@ impl TensorTrainDomain {
         Ok(cand_dir)
     }
 
-    fn clean_env(&self, cand_id: CandidateId) {
-        let cand_dir = self.workspace_root.join(format!("cand_{}", cand_id));
-        let _ = fs::remove_dir_all(cand_dir);
+    fn clean_env(&self, env_path: &std::path::Path) {
+        let _ = fs::remove_dir_all(env_path);
     }
 
     /// Extrait l'erreur L2 relative depuis le stdout du harnais.
@@ -348,9 +359,23 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         }
     }
 
-    fn mutate(&self, _rng: &mut StdRng, _parents: &[&Self::Cand]) -> crate::error::Result<Self::Cand> {
+    fn mutate(&self, _rng: &mut StdRng, parents: &[&Self::Cand]) -> crate::error::Result<Self::Cand> {
+        #[cfg(feature = "llm")]
+        {
+            if let Some(ref llm) = self.llm {
+                use crate::candidate::Candidate as _;
+                let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
+                let new_src = llm.mutate_with_feedback(&parent_src, None)?;
+                if std::env::var("FORGE_VERBOSE").is_ok() {
+                    eprintln!("[forge:mutate] LLM -> {} octets de source", new_src.len());
+                }
+                let id = crate::fnv1a(&new_src);
+                return Ok(TensorCode { raw_source: new_src, id });
+            }
+        }
+        let _ = parents;
         Err(ForgeError::Evaluation(
-            "Mutation brute non implémentée au niveau domaine — utiliser Engine + LlmMutator".into(),
+            "Mutation LLM indisponible -- compiler avec --features llm".into(),
         ))
     }
 
@@ -372,7 +397,7 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         compile_cmd.arg("build").arg("--release").current_dir(&env_path);
 
         if run_with_secure_limits(compile_cmd, self.compile_timeout, self.max_mem, self.max_disk).is_err() {
-            self.clean_env(cand.id);
+            self.clean_env(&env_path);
             return Ok(false);
         }
 
@@ -381,7 +406,7 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         run_cmd.arg("run").arg("--release").current_dir(&env_path);
 
         let run_res = run_with_secure_limits(run_cmd, self.exec_timeout, self.max_mem, self.max_disk);
-        self.clean_env(cand.id);
+        self.clean_env(&env_path);
 
         match run_res {
             Ok(_stdout) => Ok(true),
@@ -407,7 +432,7 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         compile_cmd.arg("build").arg("--release").current_dir(&env_path);
 
         if run_with_secure_limits(compile_cmd, self.compile_timeout, self.max_mem, self.max_disk).is_err() {
-            self.clean_env(cand.id);
+            self.clean_env(&env_path);
             return Err(ForgeError::Evaluation("Échec de compilation pour la mesure".into()));
         }
 
@@ -422,7 +447,7 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
                 (l2, params)
             }
             Err(_) => {
-                self.clean_env(cand.id);
+                self.clean_env(&env_path);
                 return Err(ForgeError::Evaluation("Échec d'exécution durant la mesure L2".into()));
             }
         };
@@ -435,21 +460,24 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
             Ok(_) => match parse_and_validate_metrics(&env_path, "tt_target", 0.04) {
                 Ok(objs) => objs[0],
                 Err(_) => {
-                    self.clean_env(cand.id);
+                    self.clean_env(&env_path);
                     return Err(ForgeError::Evaluation(
                         "Mesure Criterion instable ou absente — bruit thermique probable".into(),
                     ));
                 }
             },
             Err(_) => {
-                self.clean_env(cand.id);
+                self.clean_env(&env_path);
                 return Err(ForgeError::Evaluation("Échec du benchmark Criterion".into()));
             }
         };
 
-        self.clean_env(cand.id);
+        self.clean_env(&env_path);
 
         // Les 3 objectifs à minimiser
+        if std::env::var("FORGE_VERBOSE").is_ok() {
+            eprintln!("[forge:measure] valide  L2={:.3e}  latency_ns={:.0}  params={:.0}", l2_error, latency_ns, param_count);
+        }
         Ok(vec![l2_error, latency_ns, param_count])
     }
 

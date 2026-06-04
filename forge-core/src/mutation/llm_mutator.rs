@@ -17,6 +17,7 @@ use crate::diagnostics::FailureDiagnostics;
 use crate::error::{ForgeError, Result};
 
 /// Client de mutation LLM pour l'inférence locale (Ollama).
+#[derive(Clone)]
 pub struct LlmMutator {
     endpoint: String,
     model_name: String,

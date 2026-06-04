@@ -21,3 +21,8 @@ default = []
 llm = ["dep:ureq"]
 
 [workspace]
+
+[[bin]]
+name = "run_campaign"
+path = "src/bin/run_campaign.rs"
+required-features = ["llm"]
