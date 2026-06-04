@@ -145,6 +145,8 @@ pub struct Report<C: Candidate> {
     pub history: Vec<f64>,
     /// Diagnostics d'échec collectés durant la campagne (mode distribué).
     pub failure_diagnostics: Vec<FailureDiagnostics>,
+    /// Front de Pareto final (archive non dominée tronquée aux survivants).
+    pub final_front: Vec<Individual<C>>,
 }
 
 /// Le moteur, paramétré par un domaine.
@@ -376,6 +378,7 @@ where
             pop = next;
         }
 
+        let final_front = archive.clone();
         let best = archive.into_iter().next();
         let (holdout_best, holdout_baseline) = match &best {
             Some(b) => {
@@ -393,6 +396,7 @@ where
 
         Ok(Report {
             best,
+            final_front,
             final_baseline,
             holdout_best,
             holdout_baseline,
