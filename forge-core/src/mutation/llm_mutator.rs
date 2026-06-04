@@ -101,7 +101,8 @@ impl LlmMutator {
             "stream": false,
             "options": {
                 "temperature": 0.5,
-                "top_p": 0.9
+                "top_p": 0.9,
+                "num_ctx": 8192
             }
         });
 
