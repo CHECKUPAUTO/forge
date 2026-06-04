@@ -996,4 +996,51 @@ mod tests {
         assert!(pool.any_healthy());
         assert_eq!(pool.slots.iter().filter(|s| !s.failed.load(Ordering::Relaxed)).count(), 2);
     }
+
+    // ---- Domaine mock : un echec d'evaluation isole ne doit pas contaminer
+    // toute la generation (regression du court-circuit collect). ----
+    use crate::{Candidate, CandidateId, Domain, ForgeError, Score};
+    use std::sync::atomic::AtomicUsize;
+
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct MockCand { id: u64, poison: bool }
+    impl Candidate for MockCand {
+        fn id(&self) -> CandidateId { self.id }
+        fn repr(&self) -> String { format!("mock-{}", self.id) }
+    }
+
+    struct MockDomain { seed_counter: AtomicUsize }
+    impl Domain for MockDomain {
+        type Cand = MockCand;
+        fn name(&self) -> &str { "mock" }
+        fn seed(&self, _rng: &mut StdRng) -> MockCand {
+            // 1er candidat tire => echoue a l'eval ; les suivants sont valides.
+            let i = self.seed_counter.fetch_add(1, Ordering::Relaxed);
+            MockCand { id: i as u64, poison: i == 0 }
+        }
+        fn mutate(&self, _rng: &mut StdRng, _parents: &[&MockCand]) -> Result<MockCand> {
+            Ok(MockCand { id: 9999, poison: false })
+        }
+        fn verify(&self, cand: &MockCand, _trial: &Trial) -> Result<bool> {
+            if cand.poison { Err(ForgeError::Evaluation("echec simule".into())) } else { Ok(true) }
+        }
+        fn measure(&self, cand: &MockCand, _trial: &Trial) -> Result<Vec<f64>> {
+            Ok(vec![cand.id as f64])
+        }
+        fn objective_names(&self) -> Vec<String> { vec!["mock_obj".into()] }
+        fn baseline(&self, _trial: &Trial) -> Result<Score> { Ok(Score::valid(vec![999.0])) }
+    }
+
+    #[test]
+    fn eval_failure_does_not_poison_generation() {
+        let config = Config {
+            generations: 1, population: 4, survivors: 3, base_seed: 7, worker_addresses: None,
+        };
+        let domain = MockDomain { seed_counter: AtomicUsize::new(0) };
+        let report = Engine::new(domain, config).run().expect("run ok");
+        // 1 candidat sur 4 echoue ; sans le fix tout serait invalide (front vide, history INF).
+        assert!(report.best.is_some(), "un candidat valide doit survivre malgre l'echec d'un autre");
+        assert!(!report.final_front.is_empty(), "le front ne doit pas etre vide");
+        assert!(report.history[0].is_finite(), "history[0] doit etre fini, valeur={}", report.history[0]);
+    }
 }
