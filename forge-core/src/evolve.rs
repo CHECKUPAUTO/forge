@@ -301,19 +301,20 @@ where
                     &all_failure_diagnostics_mutex,
                 )
             } else {
-                // Mode local
-                let results: Result<Vec<Individual<D::Cand>>> = pop
-                    .par_iter()
-                    .map(|cand| {
-                        let score = evaluate(&self.domain, cand, &trial)?;
-                        Ok(Individual { cand: cand.clone(), score })
+                // Mode local -- un echec d'evaluation n'invalide QUE le candidat
+                // concerne, pas toute la generation (un seul candidat non-compilable
+                // ne doit pas, via le court-circuit du collect, invalider tous les autres).
+                pop.par_iter()
+                    .map(|cand| match evaluate(&self.domain, cand, &trial) {
+                        Ok(score) => Individual { cand: cand.clone(), score },
+                        Err(e) => {
+                            if std::env::var("FORGE_VERBOSE").is_ok() {
+                                eprintln!("[forge:eval] echec d'evaluation ({e}) -> candidat invalide");
+                            }
+                            Individual { cand: cand.clone(), score: Score::invalid() }
+                        }
                     })
-                    .collect();
-                results.unwrap_or_else(|_| {
-                    pop.iter()
-                        .map(|c| Individual { cand: c.clone(), score: Score::invalid() })
-                        .collect()
-                })
+                    .collect()
             };
 
             let mut valids: Vec<Individual<D::Cand>> = evaluated
