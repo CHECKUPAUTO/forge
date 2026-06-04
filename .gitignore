@@ -1,3 +1,6 @@
 target/
 *.bak
 *.before_fix
+
+forge_checkpoint.json
+/tmp/forge_campaign_*
