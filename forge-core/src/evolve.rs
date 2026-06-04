@@ -147,6 +147,8 @@ pub struct Report<C: Candidate> {
     pub failure_diagnostics: Vec<FailureDiagnostics>,
     /// Front de Pareto final (archive non dominée tronquée aux survivants).
     pub final_front: Vec<Individual<C>>,
+    /// Score de chaque membre du front re-mesuré sur le holdout (même ordre que final_front).
+    pub final_front_holdout: Vec<Option<Score>>,
 }
 
 /// Le moteur, paramétré par un domaine.
@@ -394,9 +396,19 @@ where
             None => (None, None),
         };
 
+        let holdout_front_trial = Trial {
+            generation: u64::MAX,
+            seed: self.config.base_seed ^ 0xDEAD_BEEF_CAFE_F00D,
+        };
+        let final_front_holdout: Vec<Option<Score>> = final_front
+            .iter()
+            .map(|ind| evaluate(&self.domain, &ind.cand, &holdout_front_trial).ok())
+            .collect();
+
         Ok(Report {
             best,
             final_front,
+            final_front_holdout,
             final_baseline,
             holdout_best,
             holdout_baseline,
