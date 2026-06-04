@@ -9,7 +9,15 @@ fn main() {
     println!("== Campagne low_rank :: Ollama {model} @ {endpoint} ==");
 
     let domain = TensorTrainDomain::new("/tmp/forge_campaign_lowrank").with_llm(&endpoint, &model);
-    let config = Config { generations: 3, population: 4, survivors: 2, base_seed: 42, worker_addresses: None };
+    let envu = |k: &str, d: u64| -> u64 { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) };
+    let config = Config {
+        generations: envu("GENERATIONS", 3),
+        population: envu("POPULATION", 4) as usize,
+        survivors: envu("SURVIVORS", 2) as usize,
+        base_seed: envu("BASE_SEED", 42),
+        worker_addresses: None,
+    };
+    eprintln!("[forge] campagne: generations={} population={} survivors={}", config.generations, config.population, config.survivors);
 
     match Engine::new(domain, config).run() {
         Ok(report) => {
