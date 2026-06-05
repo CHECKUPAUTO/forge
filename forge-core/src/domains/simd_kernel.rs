@@ -64,6 +64,7 @@ fn main() {
     let mut c_ref = vec![0.0f64; n * n];
     reference(&mut c_ref, &a, &b, n);
     let mut c = vec![0.0f64; n * n];
+    for x in c.iter_mut() { *x = 1.0e30; } // pre-remplissage : un kernel correct DOIT ecraser/zeroer, pas accumuler
     compute_kernel(&mut c, &a, &b, n);
     let mut max_diff = 0.0f64;
     for i in 0..n * n {
@@ -133,7 +134,7 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
         }
     }
 }"#;
-        const OBJ_WEAK: &str = r#"OBJECTIF: VITESSE. compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) calcule le produit matriciel C = A x B (matrices carrees n x n, stockage row-major). Score = latency_ns mesure par Criterion, plus petit = meilleur. Le kernel DOIT rester correct : compare element par element a la reference naive sur entrees aleatoires (tolerance 1e-7), un kernel rapide mais FAUX est rejete. Garde EXACTEMENT cette signature publique.
+        const OBJ_WEAK: &str = r#"OBJECTIF: VITESSE. compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) calcule le produit matriciel C = A x B (matrices carrees n x n, stockage row-major). Score = latency_ns mesure par Criterion, plus petit = meilleur. Le kernel DOIT rester correct : compare element par element a la reference naive sur entrees aleatoires (tolerance 1e-7), un kernel rapide mais FAUX est rejete. Garde EXACTEMENT cette signature publique. IMPORTANT: a l'entree c peut contenir des valeurs ARBITRAIRES (pas forcement zero) ; le kernel doit produire EXACTEMENT C = A*B, donc ecrase/initialise tout c (ne PAS accumuler dans son contenu initial).
 
 DEPENDANCES: uniquement la bibliotheque standard `std` (aucune crate externe, sinon ne compile pas). Compilation avec -C target-cpu=native -C opt-level=3.
 
