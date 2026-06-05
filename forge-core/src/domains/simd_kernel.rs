@@ -133,10 +133,31 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
         }
     }
 }"#;
+        const OBJ_WEAK: &str = r#"OBJECTIF: VITESSE. compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) calcule le produit matriciel C = A x B (matrices carrees n x n, stockage row-major). Score = latency_ns mesure par Criterion, plus petit = meilleur. Le kernel DOIT rester correct : compare element par element a la reference naive sur entrees aleatoires (tolerance 1e-7), un kernel rapide mais FAUX est rejete. Garde EXACTEMENT cette signature publique.
+
+DEPENDANCES: uniquement la bibliotheque standard `std` (aucune crate externe, sinon ne compile pas). Compilation avec -C target-cpu=native -C opt-level=3.
+
+Voici l'implementation NAIVE actuelle (le baseline a battre). Rends-la plus rapide en exploitant la localite memoire (cache) et l'auto-vectorisation LLVM, sans changer le resultat numerique ni la signature :
+
+#[inline(never)]
+pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
+    for i in 0..n {
+        for j in 0..n {
+            let mut acc = 0.0;
+            for k in 0..n { acc += a[i * n + k] * b[k * n + j]; }
+            c[i * n + j] = acc;
+        }
+    }
+}"#;
+        let objective = if std::env::var("FORGE_FEWSHOT").map(|v| v == "weak").unwrap_or(false) {
+            OBJ_WEAK
+        } else {
+            OBJ
+        };
         self.llm = Some(
             crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
                 .with_timeout(600)
-                .with_objective(OBJ),
+                .with_objective(objective),
         );
         self
     }
