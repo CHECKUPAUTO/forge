@@ -234,8 +234,10 @@ impl TensorTrainDomain {
 
     /// Prépare un environnement Cargo isolé pour évaluer un candidat.
     /// `seed` rend le tenseur de test déterministe par génération.
+    /// Active la mutation guidee par LLM (Ollama) : few-shot selectionne via FORGE_FEWSHOT.
     #[cfg(feature = "llm")]
     pub fn with_llm(mut self, endpoint: &str, model: &str) -> Self {
+        /// Full objectif : SVD complete avec exemple de solution compresse.
         const OBJ: &str = r#"OBJECTIF: COMPRESSION. compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64> doit renvoyer le MOINS de valeurs possible -- c'est le score `parameters_count`, plus petit = meilleur. reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]) reconstruit le tenseur dans `rebuilt`. Le tenseur d'entree est de RANG FAIBLE (somme de quelques produits exterieurs), donc son depliage matriciel est de rang faible et une SVD tronquee le compresse fortement sans perte. Stocker tous les elements (params = taille totale) est le PIRE score. Garde l'erreur L2 relative sous 1e-3.
 
 DEPENDANCES DISPONIBLES (AUCUNE autre): std, le crate `rand` 0.8, et le crate `nalgebra` 0.33. Utilise `nalgebra::DMatrix` et `.svd(true, true)` (champs `.u`, `.v_t`, `.singular_values`). N'utilise NI ndarray NI ndarray_stats: ils ne sont PAS disponibles, le code ne compilera pas.
@@ -278,8 +280,60 @@ pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]) {
     let m = us * vt;
     for i in 0..n0 { for c in 0..ncols { rebuilt[i * ncols + c] = m[(i, c)]; } }
 }"#;
-        self.llm = Some(crate::mutation::llm_mutator::LlmMutator::new(endpoint, model).with_timeout(600).with_objective(OBJ));
+
+        /// Weak objectif : identity baseline a battre, aucune piste.
+        const OBJ_WEAK: &str = r#"OBJECTIF: COMPRESSION. compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64> doit renvoyer le MOINS de valeurs possible -- c'est le score `parameters_count`, plus petit = meilleur. reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]) reconstruit le tenseur dans `rebuilt`. Le tenseur d'entree est compressible (structure sous-jacente), mais tu ne connais pas cette structure. Garde l'erreur L2 relative sous 1e-3.
+
+DEPENDANCES DISPONIBLES (AUCUNE autre): std, le crate `rand` 0.8, et le crate `nalgebra` 0.33. Utilise `nalgebra::DMatrix` et `.svd(true, true)`. N'utilise NI ndarray NI ndarray_stats.
+
+Voici l'implementation actuelle (baseline a battre — identite, params = flat.len()) :
+
+pub fn compress(flat_tensor: &[f64], _shape: &[usize]) -> Vec<f64> {
+    flat_tensor.to_vec()
+}
+
+pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
+    for (i, &v) in compressed.iter().enumerate() {
+        rebuilt[i] = v;
+    }
+}
+
+Rends compress plus compresseant tout en gardant reconstruct correct. L2 relative < 1e-3."#;
+
+        /// Mid objectif : diagnostic du probleme de compression SANS donner la solution.
+        const OBJ_MID: &str = r#"OBJECTIF: COMPRESSION. compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64> doit renvoyer le MOINS de valeurs possible -- c'est le score `parameters_count`, plus petit = meilleur. reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]) reconstruit le tenseur dans `rebuilt`. Le tenseur d'entree a une structure sous-jacente compressible. Garde l'erreur L2 relative sous 1e-3.
+
+DEPENDANCES DISPONIBLES (AUCUNE autre): std, le crate `rand` 0.8, et le crate `nalgebra` 0.33. Utilise `nalgebra::DMatrix` et `.svd(true, true)`. N'utilise NI ndarray NI ndarray_stats.
+
+DIAGNOSTIC du probleme : le tenseur d'entree provient de decompositions de rang faible (tenseurs CP / Tensor Train). Quand on deflace ce tenseur multi-mode en une matrice 2D (depliage matriciel), cette matrice conserve un rang faible equivalent. L'algorithme de deplacement des modes importe pour la forme mais pas pour le rang du resultat : deplier le tenseur en matrice et appliquer une SVD tronquee sur les valeurs singulieres revela les composantes redondantes. Stocker tous les elements (params = taille totale) est le PIRE score.
+
+Inspire-toi de cette idee de depliage + SVD tronquee pour concevoir ton compresseur. Garde EXACTEMENT ces deux signatures publiques:
+
+pub fn compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64>;
+pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);"#;
+
+        let fewshot = std::env::var("FORGE_FEWSHOT").unwrap_or_default();
+        let objective = match fewshot.as_str() {
+            "weak" => OBJ_WEAK,
+            "mid" => OBJ_MID,
+            _ => OBJ,
+        };
+        self.llm = Some(
+            crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                .with_timeout(600)
+                .with_objective(objective),
+        );
         self
+    }
+
+    /// Renvoie le nom du few-shot actuellement selectionne (pour debug).
+    #[cfg(feature = "llm")]
+    pub fn current_fewshot(&self) -> &'static str {
+        match std::env::var("FORGE_FEWSHOT").unwrap_or_default().as_str() {
+            "weak" => "weak",
+            "mid" => "mid",
+            _ => "full",
+        }
     }
 
     fn setup_candidate_env(
