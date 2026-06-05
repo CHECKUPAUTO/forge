@@ -297,6 +297,7 @@ where
                     pool,
                     &trial,
                     self.registry.as_ref(),
+                    self.cache.as_ref(),
                     g,
                     &all_failure_diagnostics_mutex,
                 )
@@ -311,13 +312,33 @@ where
                     .unwrap_or(2);
                 let eval_closure = || {
                     pop.par_iter()
-                        .map(|cand| match evaluate(&self.domain, cand, &trial) {
-                            Ok(score) => Individual { cand: cand.clone(), score },
-                            Err(e) => {
-                                if std::env::var("FORGE_VERBOSE").is_ok() {
-                                    eprintln!("[forge:eval] echec d'evaluation ({e}) -> candidat invalide");
+                        .map(|cand| {
+                            // Hit cache ?
+                            if let Some(ref cache) = self.cache {
+                                if let Some(objs) = cache.get(cand.id()) {
+                                    return Individual {
+                                        cand: cand.clone(),
+                                        score: Score::valid(objs),
+                                    };
                                 }
-                                Individual { cand: cand.clone(), score: Score::invalid() }
+                            }
+
+                            match evaluate(&self.domain, cand, &trial) {
+                                Ok(score) => {
+                                    // Insertion cache
+                                    if score.valid {
+                                        if let Some(ref cache) = self.cache {
+                                            cache.insert(cand.id(), score.objectives.clone());
+                                        }
+                                    }
+                                    Individual { cand: cand.clone(), score }
+                                }
+                                Err(e) => {
+                                    if std::env::var("FORGE_VERBOSE").is_ok() {
+                                        eprintln!("[forge:eval] echec d'evaluation ({e}) -> candidat invalide");
+                                    }
+                                    Individual { cand: cand.clone(), score: Score::invalid() }
+                                }
                             }
                         })
                         .collect::<Vec<_>>()
@@ -549,6 +570,7 @@ fn evaluate_distributed_dynamic<C: Candidate>(
     pool: &Arc<WorkerPool>,
     trial: &Trial,
     registry: Option<&AlgorithmRegistry>,
+    cache: Option<&EvaluationCache>,
     current_gen: u64,
     failure_sink: &Mutex<Vec<FailureDiagnostics>>,
 ) -> Vec<Individual<C>> {
@@ -560,6 +582,16 @@ fn evaluate_distributed_dynamic<C: Candidate>(
     population
         .par_iter()
         .map(|cand| {
+            // Hit cache ?
+            if let Some(ref c) = cache {
+                if let Some(objs) = c.get(cand.id()) {
+                    return Individual {
+                        cand: cand.clone(),
+                        score: Score::valid(objs),
+                    };
+                }
+            }
+
             let mut remaining_attempts = pool.slots.len().max(1);
 
             loop {
@@ -587,6 +619,11 @@ fn evaluate_distributed_dynamic<C: Candidate>(
                         pool.release(&worker_addr);
 
                         if eval_res.is_valid {
+                            // Insertion cache
+                            if let Some(ref c) = cache {
+                                c.insert(cand.id(), eval_res.objectives.clone());
+                            }
+
                             if let Some(reg) = registry {
                                 let record = crate::registry::GenerationRecord {
                                     candidate_id: eval_res.candidate_id,
@@ -630,6 +667,14 @@ fn evaluate_distributed_dynamic<C: Candidate>(
 
                             let score = evaluate(domain, cand, trial)
                                 .unwrap_or(Score::invalid());
+
+                            // Insertion cache fallback
+                            if score.valid {
+                                if let Some(ref c) = cache {
+                                    c.insert(cand.id(), score.objectives.clone());
+                                }
+                            }
+
                             return Individual { cand: cand.clone(), score };
                         }
 
@@ -673,6 +718,7 @@ pub fn evaluate_parallel_distributed<C: Candidate>(
     workers: &[String],
     trial: &Trial,
     registry: Option<&AlgorithmRegistry>,
+    cache: Option<&EvaluationCache>,
     current_gen: u64,
     failure_sink: &Mutex<Vec<FailureDiagnostics>>,
 ) -> Vec<Individual<C>> {
@@ -682,6 +728,16 @@ pub fn evaluate_parallel_distributed<C: Candidate>(
         .par_iter()
         .enumerate()
         .map(|(idx, cand)| {
+            // Hit cache ?
+            if let Some(ref c) = cache {
+                if let Some(objs) = c.get(cand.id()) {
+                    return Individual {
+                        cand: cand.clone(),
+                        score: Score::valid(objs),
+                    };
+                }
+            }
+
             let worker_addr = &workers[idx % workers.len()];
 
             let payload = EvaluationPayload {
@@ -694,6 +750,11 @@ pub fn evaluate_parallel_distributed<C: Candidate>(
             match dispatch_evaluation_to_worker(worker_addr, &payload, timeout) {
                 Ok(eval_res) => {
                     if eval_res.is_valid {
+                        // Insertion cache
+                        if let Some(ref c) = cache {
+                            c.insert(cand.id(), eval_res.objectives.clone());
+                        }
+
                         if let Some(reg) = registry {
                             let record = crate::registry::GenerationRecord {
                                 candidate_id: eval_res.candidate_id,
