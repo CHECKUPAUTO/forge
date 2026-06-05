@@ -31,3 +31,8 @@ required-features = ["llm"]
 name = "run_simd"
 path = "src/bin/run_simd.rs"
 required-features = ["llm"]
+
+[[bin]]
+name = "run_cuda"
+path = "src/bin/run_cuda.rs"
+required-features = ["llm"]

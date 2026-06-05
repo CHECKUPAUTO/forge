@@ -172,6 +172,8 @@ pub struct CudaKernelDomain {
     pub exec_timeout: Duration,
     /// Dimension des matrices de test (N × N).
     pub matrix_size: usize,
+    #[cfg(feature = "llm")]
+    pub llm: Option<crate::mutation::llm_mutator::LlmMutator>,
 }
 
 impl CudaKernelDomain {
@@ -181,7 +183,63 @@ impl CudaKernelDomain {
             compile_timeout: Duration::from_secs(120),
             exec_timeout: Duration::from_secs(30),
             matrix_size: 256,
+            #[cfg(feature = "llm")]
+            llm: None,
         }
+    }
+
+    #[cfg(feature = "llm")]
+    pub fn with_llm(mut self, endpoint: &str, model: &str) -> Self {
+        const OBJ: &str = r#"OBJECTIF: VITESSE GPU. Le kernel CUDA `extern "C" __global__ void compute_kernel(double* c, const double* a, const double* b, int n)` calcule C = A x B pour matrices carrees n x n en row-major. Score = latency_ns (CUDA Events), plus petit = meilleur ; un second objectif minimise le nombre d'instructions PTX. Correction OBLIGATOIRE : compare element par element a une reference CPU naive sur entrees aleatoires (tolerance 1e-6 * N), un kernel rapide mais FAUX est rejete. Garde EXACTEMENT cette signature et le extern "C".
+CONTEXTE D'EXECUTION (non controle) : lancement en blocs de 16x16 threads, grille = ceil(n/16) x ceil(n/16). Le tampon de sortie c n'est PAS initialise -> tu DOIS ecrire chaque c[row*n+col] (ecrasement, jamais +=). Compilation nvcc -O3 -arch=native.
+EXEMPLE correct et PLUS RAPIDE que le naif : GEMM TUILE en memoire partagee (tuile 16x16 = taille de bloc), acces coalesces et reutilisation en shared memory. Inspire-toi en (tu peux augmenter le travail par thread, derouler, etc.) mais garde EXACTEMENT la signature :
+extern "C" __global__ void compute_kernel(double* c, const double* a, const double* b, int n) {
+    const int TILE = 16;
+    __shared__ double As[16][16];
+    __shared__ double Bs[16][16];
+    int row = blockIdx.y * TILE + threadIdx.y;
+    int col = blockIdx.x * TILE + threadIdx.x;
+    double acc = 0.0;
+    int nt = (n + TILE - 1) / TILE;
+    for (int t = 0; t < nt; t++) {
+        int aCol = t * TILE + threadIdx.x;
+        int bRow = t * TILE + threadIdx.y;
+        As[threadIdx.y][threadIdx.x] = (row < n && aCol < n) ? a[row * n + aCol] : 0.0;
+        Bs[threadIdx.y][threadIdx.x] = (bRow < n && col < n) ? b[bRow * n + col] : 0.0;
+        __syncthreads();
+        for (int k = 0; k < TILE; k++) {
+            acc += As[threadIdx.y][k] * Bs[k][threadIdx.x];
+        }
+        __syncthreads();
+    }
+    if (row < n && col < n) {
+        c[row * n + col] = acc;
+    }
+}"#;
+        const OBJ_WEAK: &str = r#"OBJECTIF: VITESSE GPU. `extern "C" __global__ void compute_kernel(double* c, const double* a, const double* b, int n)` calcule C = A x B (matrices carrees n x n, row-major). Score = latency_ns (CUDA Events), plus petit = meilleur ; second objectif = instructions PTX. Correction OBLIGATOIRE : compare a une reference CPU naive sur entrees aleatoires (tolerance 1e-6 * N), un kernel FAUX est rejete. Garde EXACTEMENT la signature et le extern "C".
+CONTEXTE (non controle) : blocs 16x16 threads, grille ceil(n/16) au carre. c n'est PAS initialise -> ecris chaque c[row*n+col] (ecrasement). Compilation nvcc -O3 -arch=native.
+Implementation NAIVE actuelle (baseline a battre). Rends-la plus rapide en exploitant la memoire partagee, la coalescence et le parallelisme GPU, sans changer le resultat ni la signature :
+extern "C" __global__ void compute_kernel(double* c, const double* a, const double* b, int n) {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row < n && col < n) {
+        double acc = 0.0;
+        for (int k = 0; k < n; k++) {
+            acc += a[row * n + k] * b[k * n + col];
+        }
+        c[row * n + col] = acc;
+    }
+}"#;
+        let objective = match std::env::var("FORGE_FEWSHOT").unwrap_or_default().as_str() {
+            "weak" => OBJ_WEAK,
+            _ => OBJ,
+        };
+        self.llm = Some(
+            crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                .with_timeout(600)
+                .with_objective(objective),
+        );
+        self
     }
 
     /// Prépare l'environnement de build CUDA isolé :
@@ -195,7 +253,12 @@ impl CudaKernelDomain {
         size: usize,
         seed: u64,
     ) -> Result<PathBuf> {
-        let env_path = self.workspace_root.join(format!("cuda_kernel_{}", cand_id));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static ENV_NONCE: AtomicU64 = AtomicU64::new(0);
+        let nonce = ENV_NONCE.fetch_add(1, Ordering::Relaxed);
+        let env_path = self
+            .workspace_root
+            .join(format!("cuda_kernel_{}_{}", cand_id, nonce));
         fs::create_dir_all(&env_path).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 1. kernel.cu — code candidat
@@ -279,9 +342,31 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         }
     }
 
-    fn mutate(&self, _rng: &mut StdRng, _parents: &[&Self::Cand]) -> Result<Self::Cand> {
+    fn mutate(&self, _rng: &mut StdRng, parents: &[&Self::Cand]) -> Result<Self::Cand> {
+        #[cfg(feature = "llm")]
+        {
+            if let Some(ref llm) = self.llm {
+                use crate::candidate::Candidate as _;
+                let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
+                let new_src = match llm.mutate_with_feedback(&parent_src, None) {
+                    Ok(src) => src,
+                    Err(e) => {
+                        if std::env::var("FORGE_VERBOSE").is_ok() {
+                            eprintln!("[forge:mutate] echec LLM ({e}) -> repli sur le parent");
+                        }
+                        parent_src.clone()
+                    }
+                };
+                if std::env::var("FORGE_VERBOSE").is_ok() {
+                    eprintln!("[forge:mutate] LLM -> {} octets de source", new_src.len());
+                }
+                let id = crate::fnv1a(&new_src);
+                return Ok(CudaCode { source: new_src, id });
+            }
+        }
+        let _ = parents;
         Err(ForgeError::Evaluation(
-            "Orchestre globalement via l'Engine et le LlmMutator".into(),
+            "Mutation LLM indisponible -- compiler avec --features llm".into(),
         ))
     }
 
