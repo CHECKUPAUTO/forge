@@ -201,6 +201,7 @@ fn test_distributed_evolution_under_stress() {
         &workers,
         &trial,
         None, // pas de registre Sled dans ce test
+        None,
         0,
         &failure_sink,
     );
@@ -304,6 +305,7 @@ fn test_distributed_worker_unreachable_is_resilient() {
         &workers,
         &trial,
         None,
+        None,
         0,
         &failure_sink,
     );
@@ -403,6 +405,7 @@ fn test_round_robin_distribution() {
         &population,
         &workers,
         &trial,
+        None,
         None,
         0,
         &failure_sink,

@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{BufWriter, Read};
 use std::path::Path;
 use std::sync::RwLock;
 
@@ -62,11 +62,13 @@ impl EvaluationCache {
             .read()
             .map_err(|_| std::io::Error::other("Lock corrompu"))?;
         let tmp_path = format!("{}.tmp", self.persistent_path);
-        let mut file = File::create(&tmp_path)?;
-        let json = serde_json::to_string_pretty(&*reader)
+        let file = File::create(&tmp_path)?;
+        let mut writer = BufWriter::new(file);
+
+        serde_json::to_writer(&mut writer, &*reader)
             .map_err(std::io::Error::other)?;
-        file.write_all(json.as_bytes())?;
-        file.sync_all()?;
+
+        writer.into_inner()?.sync_all()?;
         std::fs::rename(tmp_path, &self.persistent_path)?;
         Ok(())
     }

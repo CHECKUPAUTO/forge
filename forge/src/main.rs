@@ -21,9 +21,10 @@ fn main() {
         population: 60,
         survivors: 8,
         base_seed: 42,
+        worker_addresses: None,
     };
 
-    let engine = Engine::new(domain, config);
+    let engine = Engine::new(domain, config.clone());
     let report = match engine.run() {
         Ok(r) => r,
         Err(e) => {
