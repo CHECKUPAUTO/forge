@@ -456,9 +456,11 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
     }
 
     fn baseline(&self, trial: &Trial) -> Result<Score> {
-        let _base = self.seed(&mut StdRng::seed_from_u64(0));
-        let _ = trial;
-        Ok(Score::valid(vec![1_000_000.0, 256.0]))
+        let base = self.seed(&mut StdRng::seed_from_u64(0));
+        match self.measure(&base, trial) {
+            Ok(objs) => Ok(Score::valid(objs)),
+            Err(_) => Ok(Score::valid(vec![1_000_000.0, 256.0])),
+        }
     }
 }
 
