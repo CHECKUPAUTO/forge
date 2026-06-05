@@ -26,3 +26,8 @@ llm = ["dep:ureq"]
 name = "run_campaign"
 path = "src/bin/run_campaign.rs"
 required-features = ["llm"]
+
+[[bin]]
+name = "run_simd"
+path = "src/bin/run_simd.rs"
+required-features = ["llm"]

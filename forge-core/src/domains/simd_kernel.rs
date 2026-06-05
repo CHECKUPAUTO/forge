@@ -97,6 +97,8 @@ pub struct SimdKernelDomain {
     pub workspace_root: PathBuf,
     pub compile_timeout: Duration,
     pub exec_timeout: Duration,
+    #[cfg(feature = "llm")]
+    pub llm: Option<crate::mutation::llm_mutator::LlmMutator>,
 }
 
 impl SimdKernelDomain {
@@ -105,7 +107,38 @@ impl SimdKernelDomain {
             workspace_root: PathBuf::from(root),
             compile_timeout: Duration::from_secs(30),
             exec_timeout: Duration::from_secs(10),
+            #[cfg(feature = "llm")]
+            llm: None,
         }
+    }
+
+    /// Active la mutation guidee par LLM (Ollama) : few-shot (GEMM correct ET plus rapide) + gabarit vectorisable.
+    #[cfg(feature = "llm")]
+    pub fn with_llm(mut self, endpoint: &str, model: &str) -> Self {
+        const OBJ: &str = r#"OBJECTIF: VITESSE. compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) calcule le produit matriciel C = A x B pour des matrices carrees n x n en row-major. Le score est `latency_ns` (latence mesuree par Criterion), plus petit = meilleur. Le kernel DOIT rester correct : il est compare element par element a la reference naive sur des entrees aleatoires (tolerance 1e-7), donc un kernel rapide mais FAUX est rejete. Garde EXACTEMENT cette signature publique.
+
+DEPENDANCES (AUCUNE autre): uniquement la bibliotheque standard `std`. Pas de crate externe (ni rayon, ni nalgebra, ni ndarray), sinon le code ne compile pas. Compilation avec `-C target-cpu=native -C opt-level=3` : l'auto-vectorisation LLVM est active, structure les boucles pour qu'elle opere (boucle interne contigue en memoire, accumulation dans un buffer contigu, eviter les dependances portees ; bloquer par tuiles ou derouler si utile).
+
+EXEMPLE correct et PLUS RAPIDE que la naive (ordre de boucle i-k-j : la boucle interne sur j est contigue en memoire pour b et c, donc bien vectorisee). Inspire-toi en -- tu peux bloquer par tuiles, derouler, ou pre-zeroer autrement -- mais garde EXACTEMENT cette signature:
+
+#[inline(never)]
+pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
+    for x in c.iter_mut() { *x = 0.0; }
+    for i in 0..n {
+        for k in 0..n {
+            let aik = a[i * n + k];
+            for j in 0..n {
+                c[i * n + j] += aik * b[k * n + j];
+            }
+        }
+    }
+}"#;
+        self.llm = Some(
+            crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                .with_timeout(600)
+                .with_objective(OBJ),
+        );
+        self
     }
 
     fn write_environment(
@@ -115,7 +148,11 @@ impl SimdKernelDomain {
         size: usize,
         seed: u64,
     ) -> Result<PathBuf> {
-        let env_path = self.workspace_root.join(format!("simd_gemm_{}", cand_id));
+        static ENV_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nonce = ENV_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let env_path = self
+            .workspace_root
+            .join(format!("simd_gemm_{}_{}", cand_id, nonce));
         let src_path = env_path.join("src");
         fs::create_dir_all(&src_path).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
         fs::create_dir_all(env_path.join("benches"))
@@ -206,9 +243,31 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
         }
     }
 
-    fn mutate(&self, _rng: &mut StdRng, _parents: &[&Self::Cand]) -> Result<Self::Cand> {
+    fn mutate(&self, _rng: &mut StdRng, parents: &[&Self::Cand]) -> Result<Self::Cand> {
+        #[cfg(feature = "llm")]
+        {
+            if let Some(ref llm) = self.llm {
+                use crate::candidate::Candidate as _;
+                let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
+                let new_src = match llm.mutate_with_feedback(&parent_src, None) {
+                    Ok(src) => src,
+                    Err(e) => {
+                        if std::env::var("FORGE_VERBOSE").is_ok() {
+                            eprintln!("[forge:mutate] echec LLM ({e}) -> repli sur le parent");
+                        }
+                        parent_src.clone()
+                    }
+                };
+                if std::env::var("FORGE_VERBOSE").is_ok() {
+                    eprintln!("[forge:mutate] LLM -> {} octets de source", new_src.len());
+                }
+                let id = crate::fnv1a(&new_src);
+                return Ok(SimdKernelCode { source: new_src, id });
+            }
+        }
+        let _ = parents;
         Err(ForgeError::Evaluation(
-            "Orchestre globalement via l'Engine et le LlmMutator".into(),
+            "Mutation LLM indisponible -- compiler avec --features llm".into(),
         ))
     }
 
