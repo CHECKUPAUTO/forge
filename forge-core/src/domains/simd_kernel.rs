@@ -150,10 +150,26 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
         }
     }
 }"#;
-        let objective = if std::env::var("FORGE_FEWSHOT").map(|v| v == "weak").unwrap_or(false) {
-            OBJ_WEAK
-        } else {
-            OBJ
+        const OBJ_MID: &str = r#"OBJECTIF: VITESSE. compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) calcule le produit matriciel C = A x B (matrices carrees n x n, row-major). Score = latency_ns (Criterion), plus petit = meilleur. Correction OBLIGATOIRE : compare element par element a la reference naive sur entrees aleatoires (tolerance 1e-7), un kernel FAUX est rejete. A l'entree, c peut contenir des valeurs ARBITRAIRES (pas forcement zero) : le kernel doit produire EXACTEMENT C=A*B, donc ecraser/initialiser tout c. Garde EXACTEMENT cette signature publique.
+DEPENDANCES: uniquement `std` (aucune crate externe, sinon ne compile pas). Compilation -C target-cpu=native -C opt-level=3 : l'auto-vectorisation LLVM est active.
+Implementation NAIVE actuelle (baseline a battre) :
+#[inline(never)]
+pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
+    for i in 0..n {
+        for j in 0..n {
+            let mut acc = 0.0;
+            for k in 0..n { acc += a[i * n + k] * b[k * n + j]; }
+            c[i * n + j] = acc;
+        }
+    }
+}
+DIAGNOSTIC du probleme (sans te donner la solution) : dans la boucle interne sur k, l'acces b[k * n + j] avance de n elements a chaque iteration (une colonne de b en stockage row-major) -> sauts en memoire, mauvaise localite de cache, et le compilateur ne peut PAS auto-vectoriser cette boucle (accumulateur scalaire + acces non contigu a b). a[i * n + k] lui est contigu ; c'est l'acces a b qui tue la performance.
+A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la memoire de façon CONTIGUE (acces a b avec un stride de 1) et devienne vectorisable, tout en produisant le bon resultat dans c (reflechis a comment et quand initialiser c selon l'ordre de boucle que tu choisis). Garde EXACTEMENT la signature."#;
+        let fewshot = std::env::var("FORGE_FEWSHOT").unwrap_or_default();
+        let objective = match fewshot.as_str() {
+            "weak" => OBJ_WEAK,
+            "mid" => OBJ_MID,
+            _ => OBJ,
         };
         self.llm = Some(
             crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)

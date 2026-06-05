@@ -304,17 +304,28 @@ where
                 // Mode local -- un echec d'evaluation n'invalide QUE le candidat
                 // concerne, pas toute la generation (un seul candidat non-compilable
                 // ne doit pas, via le court-circuit du collect, invalider tous les autres).
-                pop.par_iter()
-                    .map(|cand| match evaluate(&self.domain, cand, &trial) {
-                        Ok(score) => Individual { cand: cand.clone(), score },
-                        Err(e) => {
-                            if std::env::var("FORGE_VERBOSE").is_ok() {
-                                eprintln!("[forge:eval] echec d'evaluation ({e}) -> candidat invalide");
+                let eval_threads = std::env::var("FORGE_EVAL_CONCURRENCY")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|&n| n >= 1)
+                    .unwrap_or(2);
+                let eval_closure = || {
+                    pop.par_iter()
+                        .map(|cand| match evaluate(&self.domain, cand, &trial) {
+                            Ok(score) => Individual { cand: cand.clone(), score },
+                            Err(e) => {
+                                if std::env::var("FORGE_VERBOSE").is_ok() {
+                                    eprintln!("[forge:eval] echec d'evaluation ({e}) -> candidat invalide");
+                                }
+                                Individual { cand: cand.clone(), score: Score::invalid() }
                             }
-                            Individual { cand: cand.clone(), score: Score::invalid() }
-                        }
-                    })
-                    .collect()
+                        })
+                        .collect::<Vec<_>>()
+                };
+                match rayon::ThreadPoolBuilder::new().num_threads(eval_threads).build() {
+                    Ok(eval_pool) => eval_pool.install(eval_closure),
+                    Err(_) => eval_closure(),
+                }
             };
 
             let mut valids: Vec<Individual<D::Cand>> = evaluated
