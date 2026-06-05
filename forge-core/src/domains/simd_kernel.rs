@@ -100,6 +100,9 @@ pub struct SimdKernelDomain {
     pub exec_timeout: Duration,
     #[cfg(feature = "llm")]
     pub llm: Option<crate::mutation::llm_mutator::LlmMutator>,
+    #[cfg(all(feature = "llm", feature = "bandit"))]
+    pub bandit: std::sync::Arc<std::sync::Mutex<crate::mutation::bandit::MutationBandit>>,
+    pub reward_objective_idx: usize,
 }
 
 impl SimdKernelDomain {
@@ -110,6 +113,14 @@ impl SimdKernelDomain {
             exec_timeout: Duration::from_secs(10),
             #[cfg(feature = "llm")]
             llm: None,
+            #[cfg(all(feature = "llm", feature = "bandit"))]
+            bandit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::mutation::bandit::MutationBandit::new(
+                    crate::mutation::llm_mutator::LlmMutator::new("", ""),
+                    vec![String::new()], // placeholder — overwritten by with_llm
+                ),
+            )),
+            reward_objective_idx: 0,
         }
     }
 
@@ -165,17 +176,43 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
 }
 DIAGNOSTIC du probleme (sans te donner la solution) : dans la boucle interne sur k, l'acces b[k * n + j] avance de n elements a chaque iteration (une colonne de b en stockage row-major) -> sauts en memoire, mauvaise localite de cache, et le compilateur ne peut PAS auto-vectoriser cette boucle (accumulateur scalaire + acces non contigu a b). a[i * n + k] lui est contigu ; c'est l'acces a b qui tue la performance.
 A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la memoire de façon CONTIGUE (acces a b avec un stride de 1) et devienne vectorisable, tout en produisant le bon resultat dans c (reflechis a comment et quand initialiser c selon l'ordre de boucle que tu choisis). Garde EXACTEMENT la signature."#;
-        let fewshot = std::env::var("FORGE_FEWSHOT").unwrap_or_default();
-        let objective = match fewshot.as_str() {
-            "weak" => OBJ_WEAK,
-            "mid" => OBJ_MID,
-            _ => OBJ,
-        };
-        self.llm = Some(
-            crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
-                .with_timeout(600)
-                .with_objective(objective),
-        );
+        #[cfg(feature = "bandit")]
+        {
+            if std::env::var("FORGE_MAB").is_ok() {
+                let objectives = vec![OBJ.to_string(), OBJ_MID.to_string(), OBJ_WEAK.to_string()];
+                let base = crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                    .with_timeout(600);
+                self.bandit = std::sync::Arc::new(std::sync::Mutex::new(
+                    crate::mutation::bandit::MutationBandit::new(base, objectives),
+                ));
+            } else {
+                let objective = match std::env::var("FORGE_FEWSHOT").unwrap_or_default().as_str() {
+                    "weak" => OBJ_WEAK,
+                    "mid" => OBJ_MID,
+                    _ => OBJ,
+                };
+                self.llm = Some(
+                    crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                        .with_timeout(600)
+                        .with_objective(objective),
+                );
+            }
+        }
+
+        #[cfg(not(feature = "bandit"))]
+        {
+            let objective = match std::env::var("FORGE_FEWSHOT").unwrap_or_default().as_str() {
+                "weak" => OBJ_WEAK,
+                "mid" => OBJ_MID,
+                _ => OBJ,
+            };
+            self.llm = Some(
+                crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                    .with_timeout(600)
+                    .with_objective(objective),
+            );
+        }
+
         self
     }
 
@@ -284,6 +321,26 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
     fn mutate(&self, _rng: &mut StdRng, parents: &[&Self::Cand]) -> Result<Self::Cand> {
         #[cfg(feature = "llm")]
         {
+            // Si bandit active (FORGE_MAB=1), delegate vers le bandit.
+            #[cfg(feature = "bandit")]
+            if std::env::var("FORGE_MAB").is_ok() {
+                if let Ok(mut bandit) = self.bandit.lock() {
+                    use crate::candidate::Candidate as _;
+                    let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
+                    let (new_src, arm) = bandit.mutate_and_record_arm(&parent_src, None);
+
+                    if std::env::var("FORGE_VERBOSE").is_ok() {
+                        eprintln!("[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
+                            arm, new_src.len(), bandit.best_arm());
+                    }
+                    std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
+
+                    let id = crate::fnv1a(&new_src);
+                    return Ok(SimdKernelCode { source: new_src, id });
+                }
+            }
+
+            // Chemin standard LLM.
             if let Some(ref llm) = self.llm {
                 use crate::candidate::Candidate as _;
                 let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();

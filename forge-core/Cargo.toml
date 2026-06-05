@@ -19,6 +19,7 @@ bincode = "1"
 default = []
 # Active le generateur de candidats par LLM (client Ollama bloquant).
 llm = ["dep:ureq"]
+bandit = ["llm"]
 
 [workspace]
 

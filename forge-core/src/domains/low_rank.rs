@@ -214,6 +214,10 @@ pub struct TensorTrainDomain {
     pub tolerance: f64,
     #[cfg(feature = "llm")]
     pub llm: Option<crate::mutation::llm_mutator::LlmMutator>,
+    #[cfg(all(feature = "llm", feature = "bandit"))]
+    pub bandit: std::sync::Arc<std::sync::Mutex<crate::mutation::bandit::MutationBandit>>,
+    /// Index of objective to use as primary for bandit reward (index into `objective_names`).
+    pub reward_objective_idx: usize,
 }
 
 impl TensorTrainDomain {
@@ -229,6 +233,14 @@ impl TensorTrainDomain {
             tolerance: 1e-3,
             #[cfg(feature = "llm")]
             llm: None,
+            #[cfg(all(feature = "llm", feature = "bandit"))]
+            bandit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::mutation::bandit::MutationBandit::new(
+                    crate::mutation::llm_mutator::LlmMutator::new("", ""),
+                    vec![String::new()], // placeholder — overwritten by with_llm
+                ),
+            )),
+            reward_objective_idx: 0, // default: first objective
         }
     }
 
@@ -238,7 +250,7 @@ impl TensorTrainDomain {
     #[cfg(feature = "llm")]
     pub fn with_llm(mut self, endpoint: &str, model: &str) -> Self {
         /// Full objectif : SVD complete avec exemple de solution compresse.
-        const OBJ: &str = r#"OBJECTIF: COMPRESSION. compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64> doit renvoyer le MOINS de valeurs possible -- c'est le score `parameters_count`, plus petit = meilleur. reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]) reconstruit le tenseur dans `rebuilt`. Le tenseur d'entree est de RANG FAIBLE (somme de quelques produits exterieurs), donc son depliage matriciel est de rang faible et une SVD tronquee le compresse fortement sans perte. Stocker tous les elements (params = taille totale) est le PIRE score. Garde l'erreur L2 relative sous 1e-3.
+        const OBJ_FULL: &str = r#"OBJECTIF: COMPRESSION. compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64> doit renvoyer le MOINS de valeurs possible -- c'est le score `parameters_count`, plus petit = meilleur. reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]) reconstruit le tenseur dans `rebuilt`. Le tenseur d'entree est de RANG FAIBLE (somme de quelques produits exterieurs), donc son depliage matriciel est de rang faible et une SVD tronquee le compresse fortement sans perte. Stocker tous les elements (params = taille totale) est le PIRE score. Garde l'erreur L2 relative sous 1e-3.
 
 DEPENDANCES DISPONIBLES (AUCUNE autre): std, le crate `rand` 0.8, et le crate `nalgebra` 0.33. Utilise `nalgebra::DMatrix` et `.svd(true, true)` (champs `.u`, `.v_t`, `.singular_values`). N'utilise NI ndarray NI ndarray_stats: ils ne sont PAS disponibles, le code ne compilera pas.
 
@@ -312,18 +324,54 @@ Inspire-toi de cette idee de depliage + SVD tronquee pour concevoir ton compress
 pub fn compress(flat_tensor: &[f64], shape: &[usize]) -> Vec<f64>;
 pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);"#;
 
-        let fewshot = std::env::var("FORGE_FEWSHOT").unwrap_or_default();
-        let objective = match fewshot.as_str() {
-            "weak" => OBJ_WEAK,
-            "mid" => OBJ_MID,
-            _ => OBJ,
-        };
-        self.llm = Some(
-            crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
-                .with_timeout(600)
-                .with_objective(objective),
-        );
+        #[cfg(feature = "bandit")]
+        {
+            if std::env::var("FORGE_MAB").is_ok() {
+                let objectives = vec![OBJ_FULL.to_string(), OBJ_MID.to_string(), OBJ_WEAK.to_string()];
+                let base = crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                    .with_timeout(600);
+                self.bandit = std::sync::Arc::new(std::sync::Mutex::new(
+                    crate::mutation::bandit::MutationBandit::new(base, objectives),
+                ));
+            } else {
+                let objective = match std::env::var("FORGE_FEWSHOT").unwrap_or_default().as_str() {
+                    "weak" => OBJ_WEAK,
+                    "mid" => OBJ_MID,
+                    _ => OBJ_FULL,
+                };
+                self.llm = Some(
+                    crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                        .with_timeout(600)
+                        .with_objective(objective),
+                );
+            }
+        }
+
+        #[cfg(not(feature = "bandit"))]
+        {
+            let objective = match std::env::var("FORGE_FEWSHOT").unwrap_or_default().as_str() {
+                "weak" => OBJ_WEAK,
+                "mid" => OBJ_MID,
+                _ => OBJ_FULL,
+            };
+            self.llm = Some(
+                crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                    .with_timeout(600)
+                    .with_objective(objective),
+            );
+        }
+
         self
+    }
+
+    /// Retourne le nombre de bras du bandit (si active).
+    #[cfg(feature = "bandit")]
+    pub fn bandit_n_arms(&self) -> usize {
+        if let Ok(b) = self.bandit.lock() {
+            b.n_arms()
+        } else {
+            0
+        }
     }
 
     /// Renvoie le nom du few-shot actuellement selectionne (pour debug).
@@ -459,6 +507,27 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
     fn mutate(&self, _rng: &mut StdRng, parents: &[&Self::Cand]) -> crate::error::Result<Self::Cand> {
         #[cfg(feature = "llm")]
         {
+            // Si bandit active (FORGE_MAB=1), delegate vers le bandit.
+            #[cfg(feature = "bandit")]
+            if std::env::var("FORGE_MAB").is_ok() {
+                if let Ok(mut bandit) = self.bandit.lock() {
+                    use crate::candidate::Candidate as _;
+                    let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
+                    let (new_src, arm) = bandit.mutate_and_record_arm(&parent_src, None);
+
+                    if std::env::var("FORGE_VERBOSE").is_ok() {
+                        eprintln!("[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
+                            arm, new_src.len(), bandit.best_arm());
+                    }
+                    // Stocker l'arm selectionné pour le runner (delivre le reward apres evaluation).
+                    std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
+
+                    let id = crate::fnv1a(&new_src);
+                    return Ok(TensorCode { raw_source: new_src, id });
+                }
+            }
+
+            // Chemin standard LLM.
             if let Some(ref llm) = self.llm {
                 use crate::candidate::Candidate as _;
                 let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();

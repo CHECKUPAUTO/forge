@@ -174,6 +174,9 @@ pub struct CudaKernelDomain {
     pub matrix_size: usize,
     #[cfg(feature = "llm")]
     pub llm: Option<crate::mutation::llm_mutator::LlmMutator>,
+    #[cfg(all(feature = "llm", feature = "bandit"))]
+    pub bandit: std::sync::Arc<std::sync::Mutex<crate::mutation::bandit::MutationBandit>>,
+    pub reward_objective_idx: usize,
 }
 
 impl CudaKernelDomain {
@@ -185,6 +188,14 @@ impl CudaKernelDomain {
             matrix_size: 256,
             #[cfg(feature = "llm")]
             llm: None,
+            #[cfg(all(feature = "llm", feature = "bandit"))]
+            bandit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::mutation::bandit::MutationBandit::new(
+                    crate::mutation::llm_mutator::LlmMutator::new("", ""),
+                    vec![String::new()], // placeholder — overwritten by with_llm
+                ),
+            )),
+            reward_objective_idx: 0,
         }
     }
 
@@ -230,15 +241,43 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         c[row * n + col] = acc;
     }
 }"#;
-        let objective = match std::env::var("FORGE_FEWSHOT").unwrap_or_default().as_str() {
-            "weak" => OBJ_WEAK,
-            _ => OBJ,
-        };
-        self.llm = Some(
-            crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
-                .with_timeout(600)
-                .with_objective(objective),
-        );
+        let objectives = vec![OBJ.to_string(), OBJ_WEAK.to_string()];
+
+        #[cfg(feature = "bandit")]
+        {
+            if std::env::var("FORGE_MAB").is_ok() {
+                let objectives = vec![OBJ.to_string(), OBJ_WEAK.to_string()];
+                let base = crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                    .with_timeout(600);
+                self.bandit = std::sync::Arc::new(std::sync::Mutex::new(
+                    crate::mutation::bandit::MutationBandit::new(base, objectives),
+                ));
+            } else {
+                let objective = match std::env::var("FORGE_FEWSHOT").unwrap_or_default().as_str() {
+                    "weak" => OBJ_WEAK,
+                    _ => OBJ,
+                };
+                self.llm = Some(
+                    crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                        .with_timeout(600)
+                        .with_objective(objective),
+                );
+            }
+        }
+
+        #[cfg(not(feature = "bandit"))]
+        {
+            let objective = match std::env::var("FORGE_FEWSHOT").unwrap_or_default().as_str() {
+                "weak" => OBJ_WEAK,
+                _ => OBJ,
+            };
+            self.llm = Some(
+                crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
+                    .with_timeout(600)
+                    .with_objective(objective),
+            );
+        }
+
         self
     }
 
@@ -345,6 +384,26 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
     fn mutate(&self, _rng: &mut StdRng, parents: &[&Self::Cand]) -> Result<Self::Cand> {
         #[cfg(feature = "llm")]
         {
+            // Si bandit active (FORGE_MAB=1), delegate vers le bandit.
+            #[cfg(feature = "bandit")]
+            if std::env::var("FORGE_MAB").is_ok() {
+                if let Ok(mut bandit) = self.bandit.lock() {
+                    use crate::candidate::Candidate as _;
+                    let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
+                    let (new_src, arm) = bandit.mutate_and_record_arm(&parent_src, None);
+
+                    if std::env::var("FORGE_VERBOSE").is_ok() {
+                        eprintln!("[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
+                            arm, new_src.len(), bandit.best_arm());
+                    }
+                    std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
+
+                    let id = crate::fnv1a(&new_src);
+                    return Ok(CudaCode { source: new_src, id });
+                }
+            }
+
+            // Chemin standard LLM.
             if let Some(ref llm) = self.llm {
                 use crate::candidate::Candidate as _;
                 let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();

@@ -6,4 +6,7 @@
 //! - [`micro_mutator`](crate::micro_mutator) : mutations fines déterministes de constantes
 
 #[cfg(feature = "llm")]
+pub mod bandit;
+
+#[cfg(feature = "llm")]
 pub mod llm_mutator;
