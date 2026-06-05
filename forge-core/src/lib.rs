@@ -46,6 +46,8 @@ pub mod registry;
 pub mod mutation;
 mod trial;
 
+pub mod report_util;
+
 #[cfg(feature = "llm")]
 pub mod llm;
 
