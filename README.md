@@ -33,3 +33,7 @@ découvrir et optimiser des algorithmes, en conditions réelles d'exécution.
 cargo build --release
 cargo test --workspace
 ```
+
+## License
+
+Dual-licensed: [PolyForm Noncommercial 1.0.0](LICENSE.md) for noncommercial and personal use; commercial license required for any commercial use. See [LICENSING.md](LICENSING.md).

@@ -20,3 +20,4 @@ default = []
 llm = []
 
 [workspace]
+license = "LicenseRef-CheckupAuto-Dual"

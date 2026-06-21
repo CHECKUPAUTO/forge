@@ -3,7 +3,6 @@ name = "forge-core"
 version = "0.1.0"
 edition = "2021"
 description = "Moteur de recherche evolutionnaire d'algorithmes pilote par execution. Terrain d'execution: scirust."
-license = "MIT OR Apache-2.0"
 
 [dependencies]
 rand = "0.8"
@@ -37,3 +36,4 @@ required-features = ["llm"]
 name = "run_cuda"
 path = "src/bin/run_cuda.rs"
 required-features = ["llm"]
+license = "LicenseRef-CheckupAuto-Dual"

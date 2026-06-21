@@ -17,3 +17,4 @@ serde = { version = "1", features = ["derive"] }
 [[example]]
 name = "train_tt"
 path = "examples/train_tt.rs"
+license = "LicenseRef-CheckupAuto-Dual"
