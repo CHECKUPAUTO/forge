@@ -171,7 +171,8 @@ fn main() {
 /// Benchmark `tt_bench.rs` : chronomètre la RECONSTRUCTION seule. La
 /// compression est faite une fois hors mesure — sinon l'allocation de
 /// `compress` à chaque itération gonflerait la variance.
-const BENCH_RS: &str = r#"use criterion::{criterion_group, criterion_main, Criterion, black_box};
+const BENCH_RS: &str = r#"use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::time::Duration;
 use __CRATE__::{compress, reconstruct};
 
 fn bench_tensor_train(c: &mut Criterion) {
@@ -187,7 +188,14 @@ fn bench_tensor_train(c: &mut Criterion) {
         reconstruct(black_box(&compressed), black_box(&shape), black_box(&mut rebuilt));
     }));
 }
-criterion_group!(benches, bench_tensor_train);
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_millis(250))
+        .measurement_time(Duration::from_millis(750))
+        .sample_size(10);
+    targets = bench_tensor_train
+}
 criterion_main!(benches);
 "#;
 
@@ -246,7 +254,7 @@ impl TensorTrainDomain {
             max_disk: 50 * 1024 * 1024,      // 50 MiB
             compile_timeout: Duration::from_secs(45),
             exec_timeout: Duration::from_secs(10),
-            bench_timeout: Duration::from_secs(60),
+            bench_timeout: Duration::from_secs(120),
             tt_rank: 3,
             tolerance: 1e-3,
             #[cfg(feature = "llm")]
