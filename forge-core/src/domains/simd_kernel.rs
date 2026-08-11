@@ -178,7 +178,7 @@ DIAGNOSTIC du probleme (sans te donner la solution) : dans la boucle interne sur
 A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la memoire de façon CONTIGUE (acces a b avec un stride de 1) et devienne vectorisable, tout en produisant le bon resultat dans c (reflechis a comment et quand initialiser c selon l'ordre de boucle que tu choisis). Garde EXACTEMENT la signature."#;
         #[cfg(feature = "bandit")]
         {
-            if std::env::var("FORGE_MAB").is_ok() {
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
                 let objectives = vec![OBJ.to_string(), OBJ_MID.to_string(), OBJ_WEAK.to_string()];
                 let base = crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
                     .with_timeout(600);
@@ -323,7 +323,7 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
         {
             // Si bandit active (FORGE_MAB=1), delegate vers le bandit.
             #[cfg(feature = "bandit")]
-            if std::env::var("FORGE_MAB").is_ok() {
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
                 if let Ok(mut bandit) = self.bandit.lock() {
                     use crate::candidate::Candidate as _;
                     let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
@@ -337,9 +337,10 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
                             bandit.best_arm()
                         );
                     }
-                    std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
-
                     let id = crate::fnv1a(&new_src);
+                    if parents.first().map(|p| p.id) != Some(id) {
+                        bandit.track_candidate_arm(id, arm);
+                    }
                     return Ok(SimdKernelCode {
                         source: new_src,
                         id,
@@ -374,6 +375,39 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
         Err(ForgeError::Evaluation(
             "Mutation LLM indisponible -- compiler avec --features llm".into(),
         ))
+    }
+
+    fn observe_evaluation(
+        &self,
+        _cand: &Self::Cand,
+        _score: &Score,
+        _parent_score: Option<&Score>,
+    ) {
+        #[cfg(feature = "bandit")]
+        if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
+            let Some(parent_score) = _parent_score else {
+                return;
+            };
+            let Some(reward) = crate::mutation::bandit::MutationBandit::minimization_reward(
+                parent_score,
+                _score,
+                self.reward_objective_idx,
+            ) else {
+                return;
+            };
+            if let Ok(mut bandit) = self.bandit.lock() {
+                let delivered = bandit.deliver_reward_for_candidate(_cand.id, reward);
+                if delivered && std::env::var("FORGE_VERBOSE").is_ok() {
+                    eprintln!(
+                        "[forge:bandit] candidate={} reward={:+.4} best_arm={} means={:?}",
+                        _cand.id,
+                        reward,
+                        bandit.best_arm(),
+                        bandit.means()
+                    );
+                }
+            }
+        }
     }
 
     /// Porte de correction : compile, puis exécute le harnais qui compare la

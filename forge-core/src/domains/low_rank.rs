@@ -258,7 +258,7 @@ impl TensorTrainDomain {
                     vec![String::new()], // placeholder — overwritten by with_llm
                 ),
             )),
-            reward_objective_idx: 0, // default: first objective
+            reward_objective_idx: 2, // compression objective: parameters_count
         }
     }
 
@@ -344,7 +344,7 @@ pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);"#;
 
         #[cfg(feature = "bandit")]
         {
-            if std::env::var("FORGE_MAB").is_ok() {
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
                 let objectives = vec![
                     OBJ_FULL.to_string(),
                     OBJ_MID.to_string(),
@@ -545,7 +545,7 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         {
             // Si bandit active (FORGE_MAB=1), delegate vers le bandit.
             #[cfg(feature = "bandit")]
-            if std::env::var("FORGE_MAB").is_ok() {
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
                 if let Ok(mut bandit) = self.bandit.lock() {
                     use crate::candidate::Candidate as _;
                     let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
@@ -560,9 +560,10 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
                         );
                     }
                     // Stocker l'arm selectionné pour le runner (delivre le reward apres evaluation).
-                    std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
-
                     let id = crate::fnv1a(&new_src);
+                    if parents.first().map(|p| p.id) != Some(id) {
+                        bandit.track_candidate_arm(id, arm);
+                    }
                     return Ok(TensorCode {
                         raw_source: new_src,
                         id,
@@ -602,6 +603,39 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         Err(ForgeError::Evaluation(
             "Mutation LLM indisponible -- compiler avec --features llm".into(),
         ))
+    }
+
+    fn observe_evaluation(
+        &self,
+        _cand: &Self::Cand,
+        _score: &Score,
+        _parent_score: Option<&Score>,
+    ) {
+        #[cfg(feature = "bandit")]
+        if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
+            let Some(parent_score) = _parent_score else {
+                return;
+            };
+            let Some(reward) = crate::mutation::bandit::MutationBandit::minimization_reward(
+                parent_score,
+                _score,
+                self.reward_objective_idx,
+            ) else {
+                return;
+            };
+            if let Ok(mut bandit) = self.bandit.lock() {
+                let delivered = bandit.deliver_reward_for_candidate(_cand.id, reward);
+                if delivered && std::env::var("FORGE_VERBOSE").is_ok() {
+                    eprintln!(
+                        "[forge:bandit] candidate={} reward={:+.4} best_arm={} means={:?}",
+                        _cand.id,
+                        reward,
+                        bandit.best_arm(),
+                        bandit.means()
+                    );
+                }
+            }
+        }
     }
 
     /// PORTE DE CORRECTION : lint anti-état-global, puis compile et exécute sur

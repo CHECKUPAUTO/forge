@@ -8,7 +8,7 @@
 //! à des Workers distants via un pool dynamique avec leasing pull-based et
 //! failover automatique pour éliminer l'effet straggler.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
@@ -274,6 +274,10 @@ where
             .filter(|addrs| !addrs.is_empty())
             .map(|addrs| Arc::new(WorkerPool::new(addrs.clone())));
 
+        // Lignage temporaire d'une génération pour attribuer le feedback
+        // mutation au bon parent, sans comparer des scores de trials différents.
+        let mut parent_by_child: HashMap<CandidateId, CandidateId> = HashMap::new();
+
         let start_gen = self.start_generation;
         for g in start_gen..self.config.generations {
             let trial = Trial {
@@ -348,6 +352,21 @@ where
                 }
             };
 
+            // Le parent survivant est lui aussi évalué dans cette population :
+            // le reward compare donc enfant et parent sur exactement le même Trial.
+            let scores_by_id: HashMap<CandidateId, Score> = evaluated
+                .iter()
+                .map(|ind| (ind.cand.id(), ind.score.clone()))
+                .collect();
+            for ind in &evaluated {
+                let parent_score = parent_by_child
+                    .get(&ind.cand.id())
+                    .and_then(|parent_id| scores_by_id.get(parent_id));
+                self.domain
+                    .observe_evaluation(&ind.cand, &ind.score, parent_score);
+            }
+            parent_by_child.clear();
+
             let mut valids: Vec<Individual<D::Cand>> = evaluated
                 .into_iter()
                 .filter(|ind| ind.score.valid)
@@ -382,7 +401,11 @@ where
                 let mut next: Vec<D::Cand> = survivors.clone();
                 while next.len() < self.config.population {
                     let parent = &survivors[reproduction_rng.gen_range(0..survivors.len())];
-                    next.push(self.domain.mutate(&mut reproduction_rng, &[parent])?);
+                    let child = self.domain.mutate(&mut reproduction_rng, &[parent])?;
+                    if child.id() != parent.id() {
+                        parent_by_child.insert(child.id(), parent.id());
+                    }
+                    next.push(child);
                 }
                 pop = next;
             }
