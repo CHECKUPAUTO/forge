@@ -1,7 +1,8 @@
 [package]
 name = "forge-bridge"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "Pont d'intégration Forge (moteur évolutionnaire) ↔ SoulSystem"
 
 [lib]
@@ -18,6 +19,3 @@ rand = "0.8"
 [features]
 default = []
 llm = []
-
-[workspace]
-license = "LicenseRef-CheckupAuto-Dual"
