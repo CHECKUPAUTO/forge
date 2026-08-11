@@ -13,5 +13,6 @@ path = "src/main.rs"
 forge-core = { path = "../forge-core" }
 tokio = { version = "1", features = ["full"] }
 bincode = "1"
+serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
