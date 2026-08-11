@@ -18,16 +18,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Remove stale CUDA declaration
+      - name: Remove feature-only clippy residues
         shell: python
         run: |
           from pathlib import Path
-          p = Path("forge-core/src/domains/cuda_kernel.rs")
-          text = p.read_text()
+
+          cuda = Path("forge-core/src/domains/cuda_kernel.rs")
+          text = cuda.read_text()
           old = "        let objectives = vec![OBJ.to_string(), OBJ_WEAK.to_string()];\n\n"
           if old not in text:
               raise SystemExit("stale CUDA objectives declaration not found")
-          p.write_text(text.replace(old, "", 1))
+          cuda.write_text(text.replace(old, "", 1))
+
+          for name in ["run_campaign.rs", "run_simd.rs", "run_cuda.rs"]:
+              path = Path("forge-core/src/bin") / name
+              text = path.read_text()
+              text = text.replace(".objectives.get(0)", ".objectives.first()")
+              text = text.replace("o.get(0)", "o.first()")
+              path.write_text(text)
       - name: Validate strict bandit path
         run: |
           cargo fmt --all
@@ -36,6 +44,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add forge-core/src/domains/cuda_kernel.rs
-          git commit -m "fix(cuda): remove stale bandit objective declaration"
+          git add forge-core/src/domains/cuda_kernel.rs forge-core/src/bin/run_campaign.rs forge-core/src/bin/run_simd.rs forge-core/src/bin/run_cuda.rs
+          git commit -m "fix(clippy): clean feature-gated runner warnings"
           git push origin HEAD:chore/forge-hardening-v1
