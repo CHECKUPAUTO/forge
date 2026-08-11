@@ -70,7 +70,7 @@ impl AlgorithmRegistry {
     /// (checkpoint moteur, métadonnées) sont ignorées par construction.
     pub fn iter(&self) -> impl Iterator<Item = Result<GenerationRecord>> + '_ {
         self.db.iter().filter_map(|res| match res {
-            Ok((key, ivec)) if key.as_ref().starts_with(SYSTEM_PREFIX) => None,
+            Ok((key, _ivec)) if key.as_ref().starts_with(SYSTEM_PREFIX) => None,
             Ok((_key, ivec)) => Some(
                 serde_json::from_slice(&ivec)
                     .map_err(|e| ForgeError::Evaluation(format!("Désérialisation: {e}"))),
