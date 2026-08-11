@@ -1,0 +1,35 @@
+name: Run Hardening Migration
+
+on:
+  push:
+    branches: [chore/forge-hardening-v1]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/forge-hardening-v1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply migration
+        run: python3 tools/hardening_migrate.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Check
+        run: cargo check --workspace --all-targets
+      - name: Check bandit
+        run: cargo check -p forge-core --all-targets --features bandit
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "fix: harden cache checkpoints metrics and evaluation gates"
+          git push origin HEAD:chore/forge-hardening-v1
