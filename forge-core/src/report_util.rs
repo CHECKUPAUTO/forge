@@ -6,7 +6,7 @@ pub fn find_elite_index<C: crate::Candidate + Clone>(report: &crate::Report<C>) 
     let baseline_val = report
         .final_baseline
         .as_ref()
-        .and_then(|b| b.objectives.get(0).copied())
+        .and_then(|b| b.objectives.first().copied())
         .unwrap_or(f64::INFINITY);
 
     let mut best_idx = None;
