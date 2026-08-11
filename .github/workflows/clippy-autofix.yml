@@ -31,6 +31,14 @@ jobs:
                   raise SystemExit("distributed evaluator marker missing")
               text = text.replace(marker, "#[allow(clippy::too_many_arguments)]\n" + marker, 1)
           p.write_text(text)
+
+          p = Path("forge/src/binpack.rs")
+          text = p.read_text()
+          text = text.replace(
+              "best.map_or(true, |(_, bp)| p > bp)",
+              "best.is_none_or(|(_, bp)| p > bp)",
+          )
+          p.write_text(text)
       - name: Validate
         run: |
           cargo fmt --all
@@ -40,6 +48,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add forge-core/src/evolve.rs
-          git commit -m "fix(clippy): clean distributed evaluator"
+          git add forge-core/src/evolve.rs forge/src/binpack.rs
+          git commit -m "fix(clippy): clean workspace warnings"
           git push origin HEAD:chore/forge-hardening-v1
