@@ -39,7 +39,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use rand::rngs::StdRng;
+use rand::{rngs::StdRng, SeedableRng};
 
 use crate::candidate::CandidateId;
 use crate::criterion_parser::parse_and_validate_metrics;
@@ -52,20 +52,38 @@ use crate::trial::Trial;
 /// passer le tenseur de `compress` à `reconstruct` par un canal caché (état
 /// global), contournant la mesure de `compressed.len()`. Un compresseur
 /// numérique honnête n'en a aucun besoin.
-const BANNED_GLOBAL_STATE: &[&str] = &[
+const BANNED_CAPABILITIES: &[&str] = &[
     "thread_local",
     "lazy_static",
     "static mut",
     "OnceCell",
     "OnceLock",
     "AtomicPtr",
+    "std::fs",
+    "File",
+    "OpenOptions",
+    "std::net",
+    "TcpStream",
+    "UdpSocket",
+    "UnixStream",
+    "std::process",
+    "Command",
+    "std::env",
+    "std::path",
+    "PathBuf",
+    "include_bytes",
+    "include_str",
+    "unsafe",
+    "extern \"C\"",
 ];
 
-/// Heuristique de rejet des candidats à état global. N'est pas un bac à sable :
-/// le blindage complet est l'isolation de `compress`/`reconstruct` en process
-/// séparés. Mais cela bloque l'exploit réaliste à coût nul.
-fn uses_global_state(source: &str) -> bool {
-    BANNED_GLOBAL_STATE.iter().any(|needle| source.contains(needle))
+/// Défense en profondeur contre les canaux cachés évidents. Ceci n'est PAS
+/// une frontière de sécurité : les candidats non fiables doivent toujours être
+/// exécutés dans un sandbox OS externe au worker Forge.
+fn uses_forbidden_capability(source: &str) -> bool {
+    BANNED_CAPABILITIES
+        .iter()
+        .any(|needle| source.contains(needle))
 }
 
 /// Harnais `main.rs`. Code de confiance (le candidat ne fournit que la lib) :
@@ -153,7 +171,8 @@ fn main() {
 /// Benchmark `tt_bench.rs` : chronomètre la RECONSTRUCTION seule. La
 /// compression est faite une fois hors mesure — sinon l'allocation de
 /// `compress` à chaque itération gonflerait la variance.
-const BENCH_RS: &str = r#"use criterion::{criterion_group, criterion_main, Criterion, black_box};
+const BENCH_RS: &str = r#"use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use std::time::Duration;
 use __CRATE__::{compress, reconstruct};
 
 fn bench_tensor_train(c: &mut Criterion) {
@@ -169,7 +188,14 @@ fn bench_tensor_train(c: &mut Criterion) {
         reconstruct(black_box(&compressed), black_box(&shape), black_box(&mut rebuilt));
     }));
 }
-criterion_group!(benches, bench_tensor_train);
+criterion_group! {
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(Duration::from_millis(250))
+        .measurement_time(Duration::from_millis(750))
+        .sample_size(10);
+    targets = bench_tensor_train
+}
 criterion_main!(benches);
 "#;
 
@@ -228,7 +254,7 @@ impl TensorTrainDomain {
             max_disk: 50 * 1024 * 1024,      // 50 MiB
             compile_timeout: Duration::from_secs(45),
             exec_timeout: Duration::from_secs(10),
-            bench_timeout: Duration::from_secs(60),
+            bench_timeout: Duration::from_secs(120),
             tt_rank: 3,
             tolerance: 1e-3,
             #[cfg(feature = "llm")]
@@ -240,7 +266,7 @@ impl TensorTrainDomain {
                     vec![String::new()], // placeholder — overwritten by with_llm
                 ),
             )),
-            reward_objective_idx: 0, // default: first objective
+            reward_objective_idx: 2, // compression objective: parameters_count
         }
     }
 
@@ -326,8 +352,12 @@ pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);"#;
 
         #[cfg(feature = "bandit")]
         {
-            if std::env::var("FORGE_MAB").is_ok() {
-                let objectives = vec![OBJ_FULL.to_string(), OBJ_MID.to_string(), OBJ_WEAK.to_string()];
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
+                let objectives = vec![
+                    OBJ_FULL.to_string(),
+                    OBJ_MID.to_string(),
+                    OBJ_WEAK.to_string(),
+                ];
                 let base = crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
                     .with_timeout(600);
                 self.bandit = std::sync::Arc::new(std::sync::Mutex::new(
@@ -394,7 +424,9 @@ pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);"#;
     ) -> crate::error::Result<PathBuf> {
         static ENV_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nonce = ENV_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let cand_dir = self.workspace_root.join(format!("cand_{}_{}", cand_id, nonce));
+        let cand_dir = self
+            .workspace_root
+            .join(format!("cand_{}_{}", cand_id, nonce));
         let src_dir = cand_dir.join("src");
         let benches_dir = cand_dir.join("benches");
         fs::create_dir_all(&src_dir).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
@@ -405,7 +437,8 @@ pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);"#;
 
         // 1. Cargo.toml
         let toml_path = cand_dir.join("Cargo.toml");
-        let mut toml = fs::File::create(&toml_path).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut toml =
+            fs::File::create(&toml_path).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
         writeln!(
             toml,
             "[package]\n\
@@ -425,8 +458,10 @@ pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);"#;
         .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 2. src/lib.rs — le code du candidat
-        let mut lib = fs::File::create(src_dir.join("lib.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
-        lib.write_all(source.as_bytes()).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut lib = fs::File::create(src_dir.join("lib.rs"))
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        lib.write_all(source.as_bytes())
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 3. src/main.rs — harnais : tenseur tiré de la graine + mesure de params + porte L2
         let main_src = VERIFY_MAIN_RS
@@ -437,8 +472,10 @@ pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);"#;
             .replace("__RANK__", &self.tt_rank.to_string())
             .replace("__SEED__", &seed.to_string())
             .replace("__TOL__", &format!("{:e}", self.tolerance));
-        let mut main = fs::File::create(src_dir.join("main.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
-        main.write_all(main_src.as_bytes()).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut main = fs::File::create(src_dir.join("main.rs"))
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        main.write_all(main_src.as_bytes())
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 4. benches/tt_bench.rs — benchmark Criterion
         let bench_src = BENCH_RS
@@ -446,8 +483,11 @@ pub fn reconstruct(compressed: &[f64], shape: &[usize], rebuilt: &mut [f64]);"#;
             .replace("__N__", &tensor_size.to_string())
             .replace("__DIMS__", &num_dims.to_string())
             .replace("__TOTAL__", &total_elements.to_string());
-        let mut bench = fs::File::create(benches_dir.join("tt_bench.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
-        bench.write_all(bench_src.as_bytes()).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut bench = fs::File::create(benches_dir.join("tt_bench.rs"))
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        bench
+            .write_all(bench_src.as_bytes())
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         Ok(cand_dir)
     }
@@ -504,26 +544,38 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         }
     }
 
-    fn mutate(&self, _rng: &mut StdRng, parents: &[&Self::Cand]) -> crate::error::Result<Self::Cand> {
+    fn mutate(
+        &self,
+        _rng: &mut StdRng,
+        parents: &[&Self::Cand],
+    ) -> crate::error::Result<Self::Cand> {
         #[cfg(feature = "llm")]
         {
             // Si bandit active (FORGE_MAB=1), delegate vers le bandit.
             #[cfg(feature = "bandit")]
-            if std::env::var("FORGE_MAB").is_ok() {
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
                 if let Ok(mut bandit) = self.bandit.lock() {
                     use crate::candidate::Candidate as _;
                     let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
                     let (new_src, arm) = bandit.mutate_and_record_arm(&parent_src, None);
 
                     if std::env::var("FORGE_VERBOSE").is_ok() {
-                        eprintln!("[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
-                            arm, new_src.len(), bandit.best_arm());
+                        eprintln!(
+                            "[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
+                            arm,
+                            new_src.len(),
+                            bandit.best_arm()
+                        );
                     }
                     // Stocker l'arm selectionné pour le runner (delivre le reward apres evaluation).
-                    std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
-
                     let id = crate::fnv1a(&new_src);
-                    return Ok(TensorCode { raw_source: new_src, id });
+                    if parents.first().map(|p| p.id) != Some(id) {
+                        bandit.track_candidate_arm(id, arm);
+                    }
+                    return Ok(TensorCode {
+                        raw_source: new_src,
+                        id,
+                    });
                 }
             }
 
@@ -543,10 +595,16 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
                 if std::env::var("FORGE_VERBOSE").is_ok() {
                     eprintln!("[forge:mutate] LLM -> {} octets de source", new_src.len());
                     let _ = std::fs::create_dir_all("/tmp/forge_children");
-                    let _ = std::fs::write(format!("/tmp/forge_children/child_{}.rs", crate::fnv1a(&new_src)), &new_src);
+                    let _ = std::fs::write(
+                        format!("/tmp/forge_children/child_{}.rs", crate::fnv1a(&new_src)),
+                        &new_src,
+                    );
                 }
                 let id = crate::fnv1a(&new_src);
-                return Ok(TensorCode { raw_source: new_src, id });
+                return Ok(TensorCode {
+                    raw_source: new_src,
+                    id,
+                });
             }
         }
         let _ = parents;
@@ -555,24 +613,68 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         ))
     }
 
+    fn observe_evaluation(
+        &self,
+        _cand: &Self::Cand,
+        _score: &Score,
+        _parent_score: Option<&Score>,
+    ) {
+        #[cfg(feature = "bandit")]
+        if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
+            let Some(parent_score) = _parent_score else {
+                return;
+            };
+            let Some(reward) = crate::mutation::bandit::MutationBandit::minimization_reward(
+                parent_score,
+                _score,
+                self.reward_objective_idx,
+            ) else {
+                return;
+            };
+            if let Ok(mut bandit) = self.bandit.lock() {
+                let delivered = bandit.deliver_reward_for_candidate(_cand.id, reward);
+                if delivered && std::env::var("FORGE_VERBOSE").is_ok() {
+                    eprintln!(
+                        "[forge:bandit] candidate={} reward={:+.4} best_arm={} means={:?}",
+                        _cand.id,
+                        reward,
+                        bandit.best_arm(),
+                        bandit.means()
+                    );
+                }
+            }
+        }
+    }
+
     /// PORTE DE CORRECTION : lint anti-état-global, puis compile et exécute sur
     /// un tenseur 4×4×4×4 tiré de `trial.seed`, vérifie l'erreur L2 relative.
     fn verify(&self, cand: &Self::Cand, trial: &Trial) -> crate::error::Result<bool> {
         // Lint : un candidat à état global peut contourner la mesure de params.
-        if uses_global_state(&cand.raw_source) {
+        if uses_forbidden_capability(&cand.raw_source) {
             return Ok(false);
         }
 
         let dim_size = 4usize;
         let num_dims = 4usize;
 
-        let env_path = self.setup_candidate_env(cand.id, &cand.raw_source, dim_size, num_dims, trial.seed)?;
+        let env_path =
+            self.setup_candidate_env(cand.id, &cand.raw_source, dim_size, num_dims, trial.seed)?;
 
         // Étape 1 : Compilation supervisée
         let mut compile_cmd = Command::new("cargo");
-        compile_cmd.arg("build").arg("--release").current_dir(&env_path);
+        compile_cmd
+            .arg("build")
+            .arg("--release")
+            .current_dir(&env_path);
 
-        if run_with_secure_limits(compile_cmd, self.compile_timeout, self.max_mem, self.max_disk).is_err() {
+        if run_with_secure_limits(
+            compile_cmd,
+            self.compile_timeout,
+            self.max_mem,
+            self.max_disk,
+        )
+        .is_err()
+        {
             self.clean_env(&env_path);
             return Ok(false);
         }
@@ -581,7 +683,8 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         let mut run_cmd = Command::new("cargo");
         run_cmd.arg("run").arg("--release").current_dir(&env_path);
 
-        let run_res = run_with_secure_limits(run_cmd, self.exec_timeout, self.max_mem, self.max_disk);
+        let run_res =
+            run_with_secure_limits(run_cmd, self.exec_timeout, self.max_mem, self.max_disk);
         self.clean_env(&env_path);
 
         match run_res {
@@ -592,47 +695,73 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
 
     /// ÉVALUATION DES OBJECTIFS : [erreur_L2_relative, latence_ns, paramètres_stockés]
     fn measure(&self, cand: &Self::Cand, trial: &Trial) -> crate::error::Result<Vec<f64>> {
-        if uses_global_state(&cand.raw_source) {
+        if uses_forbidden_capability(&cand.raw_source) {
             return Err(ForgeError::Evaluation(
-                "Candidat rejeté : état global interdit (contournement de la mesure de paramètres)".into(),
+                "Candidat rejeté : état global interdit (contournement de la mesure de paramètres)"
+                    .into(),
             ));
         }
 
         let dim_size = 8usize;
         let num_dims = 4usize;
 
-        let env_path = self.setup_candidate_env(cand.id, &cand.raw_source, dim_size, num_dims, trial.seed)?;
+        let env_path =
+            self.setup_candidate_env(cand.id, &cand.raw_source, dim_size, num_dims, trial.seed)?;
 
         // Compilation
         let mut compile_cmd = Command::new("cargo");
-        compile_cmd.arg("build").arg("--release").current_dir(&env_path);
+        compile_cmd
+            .arg("build")
+            .arg("--release")
+            .current_dir(&env_path);
 
-        if run_with_secure_limits(compile_cmd, self.compile_timeout, self.max_mem, self.max_disk).is_err() {
+        if run_with_secure_limits(
+            compile_cmd,
+            self.compile_timeout,
+            self.max_mem,
+            self.max_disk,
+        )
+        .is_err()
+        {
             self.clean_env(&env_path);
-            return Err(ForgeError::Evaluation("Échec de compilation pour la mesure".into()));
+            return Err(ForgeError::Evaluation(
+                "Échec de compilation pour la mesure".into(),
+            ));
         }
 
         // ── Objectifs 1 & 3 : erreur L2 relative + paramètres stockés (mesurés au même run) ──
         let mut run_cmd = Command::new("cargo");
         run_cmd.arg("run").arg("--release").current_dir(&env_path);
 
-        let (l2_error, param_count) = match run_with_secure_limits(run_cmd, self.exec_timeout, self.max_mem, self.max_disk) {
-            Ok(stdout) => {
-                let l2 = Self::extract_l2_error(&stdout).unwrap_or(f64::INFINITY);
-                let params = Self::extract_params(&stdout).unwrap_or(f64::INFINITY);
-                (l2, params)
-            }
-            Err(_) => {
-                self.clean_env(&env_path);
-                return Err(ForgeError::Evaluation("Échec d'exécution durant la mesure L2".into()));
-            }
-        };
+        let (l2_error, param_count) =
+            match run_with_secure_limits(run_cmd, self.exec_timeout, self.max_mem, self.max_disk) {
+                Ok(stdout) => {
+                    let l2 = Self::extract_l2_error(&stdout).unwrap_or(f64::INFINITY);
+                    let params = Self::extract_params(&stdout).unwrap_or(f64::INFINITY);
+                    (l2, params)
+                }
+                Err(_) => {
+                    self.clean_env(&env_path);
+                    return Err(ForgeError::Evaluation(
+                        "Échec d'exécution durant la mesure L2".into(),
+                    ));
+                }
+            };
 
         // ── Objectif 2 : Latence via Criterion ──
         let mut bench_cmd = Command::new("cargo");
-        bench_cmd.arg("bench").arg("--bench").arg("tt_bench").current_dir(&env_path);
+        bench_cmd
+            .arg("bench")
+            .arg("--bench")
+            .arg("tt_bench")
+            .current_dir(&env_path);
 
-        let latency_ns = match run_with_secure_limits(bench_cmd, self.bench_timeout, self.max_mem, self.max_disk) {
+        let latency_ns = match run_with_secure_limits(
+            bench_cmd,
+            self.bench_timeout,
+            self.max_mem,
+            self.max_disk,
+        ) {
             Ok(_) => match parse_and_validate_metrics(&env_path, "tt_target", 0.04) {
                 Ok(objs) => objs[0],
                 Err(_) => {
@@ -644,7 +773,9 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
             },
             Err(_) => {
                 self.clean_env(&env_path);
-                return Err(ForgeError::Evaluation("Échec du benchmark Criterion".into()));
+                return Err(ForgeError::Evaluation(
+                    "Échec du benchmark Criterion".into(),
+                ));
             }
         };
 
@@ -652,7 +783,10 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
 
         // Les 3 objectifs à minimiser
         if std::env::var("FORGE_VERBOSE").is_ok() {
-            eprintln!("[forge:measure] valide  L2={:.3e}  latency_ns={:.0}  params={:.0}", l2_error, latency_ns, param_count);
+            eprintln!(
+                "[forge:measure] valide  L2={:.3e}  latency_ns={:.0}  params={:.0}",
+                l2_error, latency_ns, param_count
+            );
         }
         Ok(vec![l2_error, latency_ns, param_count])
     }
@@ -665,9 +799,10 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         ]
     }
 
-    fn baseline(&self, _trial: &Trial) -> crate::error::Result<Score> {
-        // Baseline : identité (stocke tout → params = 8^4 = 4096, erreur ~0).
-        Ok(Score::valid(vec![0.0, 5000.0, 4096.0]))
+    fn baseline(&self, trial: &Trial) -> crate::error::Result<Score> {
+        // Mesure la vraie baseline identité sur le même trial et la même machine.
+        let base = self.seed(&mut StdRng::seed_from_u64(0));
+        Ok(Score::valid(self.measure(&base, trial)?))
     }
 }
 
@@ -730,8 +865,12 @@ mod tests {
 
     #[test]
     fn test_lint_rejects_global_state() {
-        assert!(uses_global_state("thread_local! { static X: u32 = 0; }"));
-        assert!(uses_global_state("static mut COUNTER: i64 = 0;"));
-        assert!(!uses_global_state("pub fn compress(f: &[f64], _s: &[usize]) -> Vec<f64> { f.to_vec() }"));
+        assert!(uses_forbidden_capability(
+            "thread_local! { static X: u32 = 0; }"
+        ));
+        assert!(uses_forbidden_capability("static mut COUNTER: i64 = 0;"));
+        assert!(!uses_forbidden_capability(
+            "pub fn compress(f: &[f64], _s: &[usize]) -> Vec<f64> { f.to_vec() }"
+        ));
     }
 }

@@ -10,13 +10,17 @@
 //! The exploration bonus shrinks as an arm is sampled more, shifting the bandit
 //! toward exploitation of the best-performing arm.
 
+use std::collections::HashMap;
+
+use crate::candidate::CandidateId;
+use crate::domain::Score;
 
 /// Upper Confidence Bound bandit for selecting mutation strategies.
 #[derive(Clone)]
 pub struct Bandit {
-    arms: Vec<f64>,           // total reward per arm
-    pulls: Vec<u64>,          // number of times each arm has been pulled
-    exploration: f64,         // exploration parameter (default = sqrt(2))
+    arms: Vec<f64>,   // total reward per arm
+    pulls: Vec<u64>,  // number of times each arm has been pulled
+    exploration: f64, // exploration parameter (default = sqrt(2))
 }
 
 impl Bandit {
@@ -26,14 +30,13 @@ impl Bandit {
         Bandit {
             arms: vec![0.0; n_arms],
             pulls: vec![0u64; n_arms],
-            exploration: 2.0_f64.sqrt(), // standard UCB1 coefficient
+            exploration: 2.0_f64.sqrt(),
         }
     }
 
     /// Select an arm using the UCB1 policy. All arms are pulled at least once
-    /// before any probabilistic selection.
+    /// before exploitation begins.
     pub fn pull(&mut self) -> usize {
-        // Pull every arm at least once (warm-up phase).
         for k in 0..self.pulls.len() {
             if self.pulls[k] == 0 {
                 self.pulls[k] += 1;
@@ -47,8 +50,8 @@ impl Bandit {
 
         for k in 0..self.arms.len() {
             let mean = self.arms[k] / self.pulls[k] as f64;
-            let bonus = self.exploration * (2.0 * t as f64).ln() / self.pulls[k] as f64;
-            let ucb = mean + bonus.sqrt();
+            let bonus = ((t as f64).ln() / self.pulls[k] as f64).sqrt();
+            let ucb = mean + self.exploration * bonus;
             if ucb > best_ucb {
                 best_ucb = ucb;
                 best_arm = k;
@@ -62,20 +65,22 @@ impl Bandit {
     /// Deliver a reward to the specified arm. Rewards are accumulated and averaged.
     pub fn reward(&mut self, arm: usize, reward: f64) {
         assert!(arm < self.arms.len(), "arm index out of bounds");
-        self.arms[arm] += reward;
+        if reward.is_finite() {
+            self.arms[arm] += reward;
+        }
     }
 
-    /// Return the total number of pulls across all arms.
     pub fn total_pulls(&self) -> u64 {
         self.pulls.iter().sum()
     }
 
-    /// Return the arm with the highest empirical mean reward. Returns 0 if no pulls yet.
     pub fn best_arm(&self) -> usize {
         let mut best = 0;
         let mut best_mean = f64::NEG_INFINITY;
         for k in 0..self.pulls.len() {
-            if self.pulls[k] == 0 { continue; }
+            if self.pulls[k] == 0 {
+                continue;
+            }
             let mean = self.arms[k] / self.pulls[k] as f64;
             if mean > best_mean {
                 best_mean = mean;
@@ -85,207 +90,230 @@ impl Bandit {
         best
     }
 
-    /// Return the empirical mean reward per arm (0.0 for unpulled arms).
     pub fn means(&self) -> Vec<f64> {
-        let mut result = Vec::with_capacity(self.pulls.len());
-        for k in 0..self.pulls.len() {
-            if self.pulls[k] > 0 {
-                result.push(self.arms[k] / self.pulls[k] as f64);
-            } else {
-                result.push(0.0);
-            }
-        }
-        result
+        self.pulls
+            .iter()
+            .enumerate()
+            .map(|(k, &pulls)| {
+                if pulls > 0 {
+                    self.arms[k] / pulls as f64
+                } else {
+                    0.0
+                }
+            })
+            .collect()
     }
 
-    /// Reset the bandit state (for testing or re-initialization).
     pub fn reset(&mut self) {
-        for arm in &mut self.arms { *arm = 0.0; }
-        for pull in &mut self.pulls { *pull = 0; }
+        self.arms.fill(0.0);
+        self.pulls.fill(0);
     }
 }
 
 /// Wrapper that manages a set of LlmMutator arms, one per few-shot variant.
+/// `pending_arms` ties an arm choice to the concrete candidate produced by that
+/// mutation so concurrent mutations cannot overwrite each other's attribution.
 #[derive(Clone)]
 pub struct MutationBandit {
     base: crate::mutation::llm_mutator::LlmMutator,
     objectives: Vec<String>,
     bandit: Bandit,
+    pending_arms: HashMap<CandidateId, usize>,
 }
 
 impl MutationBandit {
-    /// Create a new mutation bandit from a base LlmMutator and a list of objectives.
     pub fn new(base: crate::mutation::llm_mutator::LlmMutator, objectives: Vec<String>) -> Self {
         let n = objectives.len();
         MutationBandit {
             base,
             objectives,
             bandit: Bandit::new(n),
+            pending_arms: HashMap::new(),
         }
     }
 
-    /// Select an arm and mutate with that objective. Returns the mutated code
-    /// and records which arm was selected (accessible via best_arm after rewards are delivered).
     pub fn mutate_with_feedback(
         &mut self,
         parent_source: &str,
         diagnostics: Option<&crate::diagnostics::FailureDiagnostics>,
     ) -> String {
-        let arm = self.bandit.pull();
-
-        // Clone base mutator and set this arm's objective.
-        let mut muttator = self.base.clone();
-        muttator = muttator.with_objective(&self.objectives[arm]);
-
-        muttator
-            .mutate_with_feedback(parent_source, diagnostics)
-            .unwrap_or_else(|_| parent_source.to_string())
+        self.mutate_and_record_arm(parent_source, diagnostics).0
     }
 
-    /// Same as mutate_with_feedback but returns the selected arm index.
     pub fn mutate_and_record_arm(
         &mut self,
         parent_source: &str,
         diagnostics: Option<&crate::diagnostics::FailureDiagnostics>,
     ) -> (String, usize) {
         let arm = self.bandit.pull();
-        let mut muttator = self.base.clone();
-        muttator = muttator.with_objective(&self.objectives[arm]);
-        let new_src = muttator
+        let mut mutator = self.base.clone();
+        mutator = mutator.with_objective(&self.objectives[arm]);
+        let new_src = mutator
             .mutate_with_feedback(parent_source, diagnostics)
             .unwrap_or_else(|_| parent_source.to_string());
         (new_src, arm)
     }
 
-    /// Deliver a reward to the arm selected by the most recent `mutate_*` call.
-    /// The caller must track which arm was selected via a separate mechanism
-    /// (see low_rank.rs for the pattern: capture the arm index alongside the result).
-    pub fn deliver_reward(&mut self, arm: usize, reward: f64) {
-        self.bandit.reward(arm, reward);
+    /// Associate the selected arm with the concrete candidate it produced.
+    pub fn track_candidate_arm(&mut self, candidate_id: CandidateId, arm: usize) {
+        if arm < self.objectives.len() {
+            self.pending_arms.insert(candidate_id, arm);
+        }
     }
 
-    /// Return the index of the best-performing arm so far.
+    /// Consume the pending arm for a candidate and deliver its reward exactly once.
+    pub fn deliver_reward_for_candidate(&mut self, candidate_id: CandidateId, reward: f64) -> bool {
+        let Some(arm) = self.pending_arms.remove(&candidate_id) else {
+            return false;
+        };
+        self.bandit.reward(arm, reward.clamp(-1.0, 1.0));
+        true
+    }
+
+    /// Reward for a minimization objective. Invalid children receive -1.0;
+    /// otherwise the reward is the relative improvement over the parent,
+    /// clamped to [-1, 1]. Missing or invalid parent data yields no reward.
+    pub fn minimization_reward(parent: &Score, child: &Score, objective_idx: usize) -> Option<f64> {
+        if !parent.valid {
+            return None;
+        }
+        if !child.valid {
+            return Some(-1.0);
+        }
+        let parent_value = *parent.objectives.get(objective_idx)?;
+        let child_value = *child.objectives.get(objective_idx)?;
+        if !parent_value.is_finite() || !child_value.is_finite() {
+            return None;
+        }
+        let denom = parent_value.abs().max(1.0e-12);
+        Some(((parent_value - child_value) / denom).clamp(-1.0, 1.0))
+    }
+
+    pub fn deliver_reward(&mut self, arm: usize, reward: f64) {
+        self.bandit.reward(arm, reward.clamp(-1.0, 1.0));
+    }
+
     pub fn best_arm(&self) -> usize {
         self.bandit.best_arm()
     }
 
-    /// Return empirical mean rewards per arm.
     pub fn means(&self) -> Vec<f64> {
         self.bandit.means()
     }
 
-    /// Total mutations attempted across all arms.
     pub fn total_pulls(&self) -> u64 {
         self.bandit.total_pulls()
     }
 
-    /// Return the number of objectives (arms).
     pub fn n_arms(&self) -> usize {
         self.objectives.len()
     }
-}
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+    pub fn pending_len(&self) -> usize {
+        self.pending_arms.len()
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use rand::SeedableRng;
-    use rand::Rng;
     use super::*;
+    use rand::Rng;
+    use rand::SeedableRng;
 
     #[test]
     fn test_ucb1_converges_to_best_arm() {
         let mut bandit = Bandit::new(3);
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-        // Arm 1 is strictly better than others: always rewards ~0.8-0.9
-        // Arms 0 and 2 are worse: ~0.1-0.2
-        let n_rounds = 100;
-        for _ in 0..n_rounds {
+        for _ in 0..100 {
             let arm = bandit.pull();
             let reward = match arm {
-                1 => rng.gen::<f64>() * 0.1 + 0.8, // ~0.85 avg
-                _ => rng.gen::<f64>() * 0.1 + 0.1,  // ~0.15 avg
+                1 => rng.gen::<f64>() * 0.1 + 0.8,
+                _ => rng.gen::<f64>() * 0.1 + 0.1,
             };
             bandit.reward(arm, reward);
         }
-
-        let best = bandit.best_arm();
-        assert_eq!(best, 1, "UCB1 should converge to arm 1 (highest mean), got {best}");
+        assert_eq!(bandit.best_arm(), 1);
     }
 
     #[test]
     fn test_ucb1_exploration_phase() {
         let mut bandit = Bandit::new(4);
-
-        let mut pulled: Vec<bool> = vec![false; 4];
+        let mut pulled = [false; 4];
         for _ in 0..4 {
             let arm = bandit.pull();
-            assert!(!pulled[arm], "arm {} pulled twice during warm-up", arm);
+            assert!(!pulled[arm]);
             pulled[arm] = true;
         }
-        assert!(pulled.iter().all(|&b| b), "not all arms pulled in warm-up");
+        assert!(pulled.iter().all(|&v| v));
     }
 
     #[test]
     fn test_ucb1_single_arm() {
         let mut bandit = Bandit::new(1);
-
         for _ in 0..50 {
             let arm = bandit.pull();
-            assert_eq!(arm, 0); // only one arm exists
+            assert_eq!(arm, 0);
             bandit.reward(arm, 1.0);
         }
-
         assert_eq!(bandit.best_arm(), 0);
         assert_eq!(bandit.means()[0], 1.0);
     }
 
     #[test]
     fn test_ucb1_streaking_arm() {
-        // Arm 0 dominates with very high probability — should be selected >80% after warm-up.
         let mut bandit = Bandit::new(3);
         let mut rng = rand::rngs::StdRng::seed_from_u64(42);
-
-        let n_rounds = 200;
-        let arm0_count = {
-            let mut count = 0u64;
-            for _ in 0..n_rounds {
-                let arm = bandit.pull();
-                if arm == 0 { count += 1; }
-                // Arm 0 gives near-perfect rewards; others give near-zero.
-                let reward = match arm {
-                    0 => rng.gen::<f64>() * 0.05 + 0.9,   // ~0.925 avg
-                    _ => rng.gen::<f64>() * 0.05,            // ~0.025 avg
-                };
-                bandit.reward(arm, reward);
+        let mut arm0_count = 0u64;
+        for _ in 0..200 {
+            let arm = bandit.pull();
+            if arm == 0 {
+                arm0_count += 1;
             }
-            count
-        };
-
-        let fraction = arm0_count as f64 / n_rounds as f64;
-        assert!(
-            fraction > 0.80,
-            "Arm 0 should be selected >80% of the time (got {fraction:.2}%), bandit means = {:?}",
-            bandit.means()
-        );
+            let reward = match arm {
+                0 => rng.gen::<f64>() * 0.05 + 0.9,
+                _ => rng.gen::<f64>() * 0.05,
+            };
+            bandit.reward(arm, reward);
+        }
+        assert!(arm0_count as f64 / 200.0 > 0.80);
     }
 
     #[test]
     fn test_bandit_reset() {
         let mut bandit = Bandit::new(2);
-
         for _ in 0..10 {
             let arm = bandit.pull();
             bandit.reward(arm, if arm == 0 { 1.0 } else { 0.0 });
-
-        // Before reset, arm 0 should dominate.
-        assert_eq!(bandit.best_arm(), 0);
         }
-
         bandit.reset();
         assert_eq!(bandit.total_pulls(), 0);
         assert_eq!(bandit.means(), vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn reward_is_attributed_to_candidate_once() {
+        let base = crate::mutation::llm_mutator::LlmMutator::new("http://invalid", "test");
+        let mut mutation = MutationBandit::new(base, vec!["a".into(), "b".into()]);
+        let arm = mutation.bandit.pull();
+        mutation.track_candidate_arm(42, arm);
+        assert_eq!(mutation.pending_len(), 1);
+        assert!(mutation.deliver_reward_for_candidate(42, 0.5));
+        assert!(!mutation.deliver_reward_for_candidate(42, 0.5));
+        assert_eq!(mutation.pending_len(), 0);
+        assert!((mutation.means()[arm] - 0.5).abs() < 1.0e-12);
+    }
+
+    #[test]
+    fn minimization_reward_handles_invalid_and_improvement() {
+        let parent = Score::valid(vec![100.0]);
+        let child = Score::valid(vec![80.0]);
+        assert_eq!(
+            MutationBandit::minimization_reward(&parent, &child, 0),
+            Some(0.2)
+        );
+        assert_eq!(
+            MutationBandit::minimization_reward(&parent, &Score::invalid(), 0),
+            Some(-1.0)
+        );
     }
 }

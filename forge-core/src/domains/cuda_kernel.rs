@@ -241,11 +241,9 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         c[row * n + col] = acc;
     }
 }"#;
-        let objectives = vec![OBJ.to_string(), OBJ_WEAK.to_string()];
-
         #[cfg(feature = "bandit")]
         {
-            if std::env::var("FORGE_MAB").is_ok() {
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
                 let objectives = vec![OBJ.to_string(), OBJ_WEAK.to_string()];
                 let base = crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
                     .with_timeout(600);
@@ -334,7 +332,7 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
     fn extract_ptx_count(env_path: &Path) -> f64 {
         let ptx_path = env_path.join("kernel.ptx");
         if !ptx_path.exists() {
-            return 256.0; // valeur par défaut conservative
+            return 0.0; // métrique absente = invalide
         }
         match fs::read_to_string(&ptx_path) {
             Ok(content) => content
@@ -349,7 +347,7 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
                         && trimmed.contains(';')
                 })
                 .count() as f64,
-            Err(_) => 256.0,
+            Err(_) => 0.0,
         }
     }
 }
@@ -386,20 +384,28 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         {
             // Si bandit active (FORGE_MAB=1), delegate vers le bandit.
             #[cfg(feature = "bandit")]
-            if std::env::var("FORGE_MAB").is_ok() {
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
                 if let Ok(mut bandit) = self.bandit.lock() {
                     use crate::candidate::Candidate as _;
                     let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
                     let (new_src, arm) = bandit.mutate_and_record_arm(&parent_src, None);
 
                     if std::env::var("FORGE_VERBOSE").is_ok() {
-                        eprintln!("[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
-                            arm, new_src.len(), bandit.best_arm());
+                        eprintln!(
+                            "[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
+                            arm,
+                            new_src.len(),
+                            bandit.best_arm()
+                        );
                     }
-                    std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
-
                     let id = crate::fnv1a(&new_src);
-                    return Ok(CudaCode { source: new_src, id });
+                    if parents.first().map(|p| p.id) != Some(id) {
+                        bandit.track_candidate_arm(id, arm);
+                    }
+                    return Ok(CudaCode {
+                        source: new_src,
+                        id,
+                    });
                 }
             }
 
@@ -420,13 +426,49 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
                     eprintln!("[forge:mutate] LLM -> {} octets de source", new_src.len());
                 }
                 let id = crate::fnv1a(&new_src);
-                return Ok(CudaCode { source: new_src, id });
+                return Ok(CudaCode {
+                    source: new_src,
+                    id,
+                });
             }
         }
         let _ = parents;
         Err(ForgeError::Evaluation(
             "Mutation LLM indisponible -- compiler avec --features llm".into(),
         ))
+    }
+
+    fn observe_evaluation(
+        &self,
+        _cand: &Self::Cand,
+        _score: &Score,
+        _parent_score: Option<&Score>,
+    ) {
+        #[cfg(feature = "bandit")]
+        if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
+            let Some(parent_score) = _parent_score else {
+                return;
+            };
+            let Some(reward) = crate::mutation::bandit::MutationBandit::minimization_reward(
+                parent_score,
+                _score,
+                self.reward_objective_idx,
+            ) else {
+                return;
+            };
+            if let Ok(mut bandit) = self.bandit.lock() {
+                let delivered = bandit.deliver_reward_for_candidate(_cand.id, reward);
+                if delivered && std::env::var("FORGE_VERBOSE").is_ok() {
+                    eprintln!(
+                        "[forge:bandit] candidate={} reward={:+.4} best_arm={} means={:?}",
+                        _cand.id,
+                        reward,
+                        bandit.best_arm(),
+                        bandit.means()
+                    );
+                }
+            }
+        }
     }
 
     /// Porte de correction : compilation nvcc + exécution + validation
@@ -439,7 +481,8 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         let output_bin = env_path.join("cuda_verify");
         let mut comp_cmd = Command::new("nvcc");
         comp_cmd
-            .arg("-O3").arg("-arch=native")
+            .arg("-O3")
+            .arg("-arch=native")
             .arg("--ptxas-options=-v")
             .arg("-o")
             .arg(&output_bin)
@@ -474,7 +517,8 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         let output_bin = env_path.join("cuda_verify");
         let mut comp_cmd = Command::new("nvcc");
         comp_cmd
-            .arg("-O3").arg("-arch=native")
+            .arg("-O3")
+            .arg("-arch=native")
             .arg("--ptxas-options=-v")
             .arg("-o")
             .arg(&output_bin)
@@ -486,8 +530,26 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
             Ok(_) => {}
             Err(e) => {
                 let _ = fs::remove_dir_all(&env_path);
-                return Err(ForgeError::Evaluation(format!("Échec compilation nvcc: {e}")));
+                return Err(ForgeError::Evaluation(format!(
+                    "Échec compilation nvcc: {e}"
+                )));
             }
+        }
+
+        // Génère explicitement le PTX mesuré par le second objectif.
+        let ptx_path = env_path.join("kernel.ptx");
+        let mut ptx_cmd = Command::new("nvcc");
+        ptx_cmd
+            .arg("-O3")
+            .arg("-arch=native")
+            .arg("--ptx")
+            .arg("-o")
+            .arg(&ptx_path)
+            .arg(env_path.join("kernel.cu"))
+            .current_dir(&env_path);
+        if let Err(e) = run_with_timeout(ptx_cmd, self.compile_timeout) {
+            let _ = fs::remove_dir_all(&env_path);
+            return Err(ForgeError::Evaluation(format!("Échec génération PTX: {e}")));
         }
 
         // Exécution du binaire GPU
@@ -504,6 +566,12 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
 
         // Comptage des instructions PTX depuis le fichier .ptx généré
         let ptx_count = Self::extract_ptx_count(&env_path);
+        if ptx_count <= 0.0 {
+            let _ = fs::remove_dir_all(&env_path);
+            return Err(ForgeError::Evaluation(
+                "PTX absent ou vide après génération explicite".into(),
+            ));
+        }
 
         let _ = fs::remove_dir_all(&env_path);
 
@@ -516,10 +584,7 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
 
     fn baseline(&self, trial: &Trial) -> Result<Score> {
         let base = self.seed(&mut StdRng::seed_from_u64(0));
-        match self.measure(&base, trial) {
-            Ok(objs) => Ok(Score::valid(objs)),
-            Err(_) => Ok(Score::valid(vec![1_000_000.0, 256.0])),
-        }
+        Ok(Score::valid(self.measure(&base, trial)?))
     }
 }
 

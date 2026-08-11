@@ -30,12 +30,18 @@ pub struct Score {
 impl Score {
     /// Score d'un candidat qui n'a pas passe la porte de correction.
     pub fn invalid() -> Self {
-        Score { objectives: Vec::new(), valid: false }
+        Score {
+            objectives: Vec::new(),
+            valid: false,
+        }
     }
 
     /// Construit un score valide a partir d'objectifs finis.
     pub fn valid(objectives: Vec<f64>) -> Self {
-        Score { objectives, valid: true }
+        Score {
+            objectives,
+            valid: true,
+        }
     }
 
     /// Domination au sens de Pareto (minimisation). Un score invalide est
@@ -90,6 +96,19 @@ pub trait Domain: Send + Sync {
 
     /// Score de reference (la baseline a battre) pour cet essai.
     fn baseline(&self, trial: &Trial) -> Result<Score>;
+
+    /// Hook appelé par le moteur une fois toute la population évaluée sur le
+    /// même `Trial`. `parent_score` est le score, sur ce même trial, du parent
+    /// ayant produit le candidat lorsqu'il est encore identifiable dans la
+    /// population. Les domaines qui n'apprennent pas de ce feedback n'ont rien
+    /// à implémenter.
+    fn observe_evaluation(
+        &self,
+        _cand: &Self::Cand,
+        _score: &Score,
+        _parent_score: Option<&Score>,
+    ) {
+    }
 }
 
 #[cfg(test)]

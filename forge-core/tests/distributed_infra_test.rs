@@ -9,17 +9,37 @@
 //!    de connexion.
 //! 4. Valide que 100% des réponses sont collectées sans corruption.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use forge_core::{Candidate, CandidateId};
 use forge_core::evaluate_parallel_distributed;
 use forge_core::protocol::{EvaluationPayload, EvaluationResult};
+use forge_core::{Candidate, CandidateId};
 use forge_core::{Individual, Trial};
+
+fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut std::net::TcpStream) -> T {
+    let mut len = [0u8; 4];
+    stream.read_exact(&mut len).expect("read frame length");
+    let len = u32::from_be_bytes(len) as usize;
+    assert!(len > 0 && len <= forge_core::protocol::MAX_MESSAGE_BYTES);
+    let mut payload = vec![0u8; len];
+    stream.read_exact(&mut payload).expect("read frame payload");
+    bincode::deserialize(&payload).expect("decode frame")
+}
+
+fn write_frame<T: serde::Serialize>(stream: &mut std::net::TcpStream, value: &T) {
+    let payload = bincode::serialize(value).expect("encode frame");
+    let len = u32::try_from(payload.len()).expect("frame length");
+    stream
+        .write_all(&len.to_be_bytes())
+        .expect("write frame length");
+    stream.write_all(&payload).expect("write frame payload");
+    stream.flush().expect("flush frame");
+}
 
 // ---------------------------------------------------------------------------
 // Candidat de stub pour le test
@@ -66,9 +86,7 @@ fn evaluate_stub(payload: &EvaluationPayload) -> EvaluationResult {
             candidate_id: payload.candidate_id,
             is_valid: false,
             objectives: vec![],
-            error_message: Some(
-                "Timeout dépassé : boucle infinie détectée, processus tué.".into(),
-            ),
+            error_message: Some("Timeout dépassé : boucle infinie détectée, processus tué.".into()),
         }
     } else {
         // Candidat valide — objectifs simulés
@@ -107,9 +125,7 @@ fn test_distributed_evolution_under_stress() {
         };
 
         // Non-bloquant pour permettre l'arrêt propre
-        listener
-            .set_nonblocking(true)
-            .expect("set_nonblocking");
+        listener.set_nonblocking(true).expect("set_nonblocking");
 
         // Signale que le worker est prêt
         b.wait();
@@ -123,25 +139,14 @@ fn test_distributed_evolution_under_stress() {
                 Ok((mut stream, _peer)) => {
                     // Une tâche par connexion pour la concurrence
                     thread::spawn(move || {
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(10)))
-                            .ok();
-                        stream
-                            .set_write_timeout(Some(Duration::from_secs(10)))
-                            .ok();
+                        stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+                        stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
 
-                        let payload: EvaluationPayload =
-                            match bincode::deserialize_from(&mut stream) {
-                                Ok(p) => p,
-                                Err(_) => return,
-                            };
+                        let payload: EvaluationPayload = read_frame(&mut stream);
 
                         let result = evaluate_stub(&payload);
 
-                        if let Ok(bytes) = bincode::serialize(&result) {
-                            let _ = stream.write_all(&bytes);
-                            let _ = stream.flush();
-                        }
+                        write_frame(&mut stream, &result);
                     });
                 }
                 Err(ref err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -149,9 +154,7 @@ fn test_distributed_evolution_under_stress() {
                     thread::sleep(Duration::from_millis(5));
                 }
                 Err(err) => {
-                    e.lock()
-                        .unwrap()
-                        .push(format!("accept error: {err}"));
+                    e.lock().unwrap().push(format!("accept error: {err}"));
                     break;
                 }
             }
@@ -300,15 +303,8 @@ fn test_distributed_worker_unreachable_is_resilient() {
     };
     let failure_sink = Mutex::new(Vec::new());
 
-    let individuals: Vec<Individual<StubCandidate>> = evaluate_parallel_distributed(
-        &population,
-        &workers,
-        &trial,
-        None,
-        None,
-        0,
-        &failure_sink,
-    );
+    let individuals: Vec<Individual<StubCandidate>> =
+        evaluate_parallel_distributed(&population, &workers, &trial, None, None, 0, &failure_sink);
 
     // Tous les candidats doivent revenir (marqués invalides)
     assert_eq!(individuals.len(), 5);
@@ -363,12 +359,9 @@ fn test_round_robin_distribution() {
                 Ok((mut stream, _)) => {
                     thread::spawn(move || {
                         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-                        let payload: EvaluationPayload =
-                            bincode::deserialize_from(&mut stream).unwrap();
+                        let payload: EvaluationPayload = read_frame(&mut stream);
                         let result = evaluate_stub(&payload);
-                        let bytes = bincode::serialize(&result).unwrap();
-                        let _ = stream.write_all(&bytes);
-                        let _ = stream.flush();
+                        write_frame(&mut stream, &result);
                     });
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -391,25 +384,15 @@ fn test_round_robin_distribution() {
 
     // Simuler 2 workers (même adresse pour le test — dans la pratique ce
     // seraient des machines différentes)
-    let workers = vec![
-        "127.0.0.1:19997".to_string(),
-        "127.0.0.1:19997".to_string(),
-    ];
+    let workers = vec!["127.0.0.1:19997".to_string(), "127.0.0.1:19997".to_string()];
     let trial = Trial {
         generation: 0,
         seed: 42,
     };
     let failure_sink = Mutex::new(Vec::new());
 
-    let individuals: Vec<Individual<StubCandidate>> = evaluate_parallel_distributed(
-        &population,
-        &workers,
-        &trial,
-        None,
-        None,
-        0,
-        &failure_sink,
-    );
+    let individuals: Vec<Individual<StubCandidate>> =
+        evaluate_parallel_distributed(&population, &workers, &trial, None, None, 0, &failure_sink);
 
     assert_eq!(individuals.len(), 10);
     // Tous valides

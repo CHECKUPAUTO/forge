@@ -178,7 +178,7 @@ DIAGNOSTIC du probleme (sans te donner la solution) : dans la boucle interne sur
 A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la memoire de façon CONTIGUE (acces a b avec un stride de 1) et devienne vectorisable, tout en produisant le bon resultat dans c (reflechis a comment et quand initialiser c selon l'ordre de boucle que tu choisis). Garde EXACTEMENT la signature."#;
         #[cfg(feature = "bandit")]
         {
-            if std::env::var("FORGE_MAB").is_ok() {
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
                 let objectives = vec![OBJ.to_string(), OBJ_MID.to_string(), OBJ_WEAK.to_string()];
                 let base = crate::mutation::llm_mutator::LlmMutator::new(endpoint, model)
                     .with_timeout(600);
@@ -234,8 +234,8 @@ A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la me
             .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 1. Cargo.toml
-        let mut toml =
-            File::create(env_path.join("Cargo.toml")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut toml = File::create(env_path.join("Cargo.toml"))
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
         writeln!(
             toml,
             "[package]\nname = \"gemm_bench\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
@@ -246,8 +246,8 @@ A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la me
         .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 2. lib.rs — code candidat
-        let mut lib =
-            File::create(src_path.join("lib.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut lib = File::create(src_path.join("lib.rs"))
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
         writeln!(lib, "#![allow(dead_code)]\n{}", raw_code)
             .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
@@ -255,8 +255,8 @@ A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la me
         let main_src = VERIFY_MAIN
             .replace("__SIZE__", &size.to_string())
             .replace("__SEED__", &seed.to_string());
-        let mut main =
-            File::create(src_path.join("main.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut main = File::create(src_path.join("main.rs"))
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
         main.write_all(main_src.as_bytes())
             .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
@@ -323,20 +323,28 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
         {
             // Si bandit active (FORGE_MAB=1), delegate vers le bandit.
             #[cfg(feature = "bandit")]
-            if std::env::var("FORGE_MAB").is_ok() {
+            if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
                 if let Ok(mut bandit) = self.bandit.lock() {
                     use crate::candidate::Candidate as _;
                     let parent_src = parents.first().map(|p| p.repr()).unwrap_or_default();
                     let (new_src, arm) = bandit.mutate_and_record_arm(&parent_src, None);
 
                     if std::env::var("FORGE_VERBOSE").is_ok() {
-                        eprintln!("[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
-                            arm, new_src.len(), bandit.best_arm());
+                        eprintln!(
+                            "[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
+                            arm,
+                            new_src.len(),
+                            bandit.best_arm()
+                        );
                     }
-                    std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
-
                     let id = crate::fnv1a(&new_src);
-                    return Ok(SimdKernelCode { source: new_src, id });
+                    if parents.first().map(|p| p.id) != Some(id) {
+                        bandit.track_candidate_arm(id, arm);
+                    }
+                    return Ok(SimdKernelCode {
+                        source: new_src,
+                        id,
+                    });
                 }
             }
 
@@ -357,13 +365,49 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
                     eprintln!("[forge:mutate] LLM -> {} octets de source", new_src.len());
                 }
                 let id = crate::fnv1a(&new_src);
-                return Ok(SimdKernelCode { source: new_src, id });
+                return Ok(SimdKernelCode {
+                    source: new_src,
+                    id,
+                });
             }
         }
         let _ = parents;
         Err(ForgeError::Evaluation(
             "Mutation LLM indisponible -- compiler avec --features llm".into(),
         ))
+    }
+
+    fn observe_evaluation(
+        &self,
+        _cand: &Self::Cand,
+        _score: &Score,
+        _parent_score: Option<&Score>,
+    ) {
+        #[cfg(feature = "bandit")]
+        if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
+            let Some(parent_score) = _parent_score else {
+                return;
+            };
+            let Some(reward) = crate::mutation::bandit::MutationBandit::minimization_reward(
+                parent_score,
+                _score,
+                self.reward_objective_idx,
+            ) else {
+                return;
+            };
+            if let Ok(mut bandit) = self.bandit.lock() {
+                let delivered = bandit.deliver_reward_for_candidate(_cand.id, reward);
+                if delivered && std::env::var("FORGE_VERBOSE").is_ok() {
+                    eprintln!(
+                        "[forge:bandit] candidate={} reward={:+.4} best_arm={} means={:?}",
+                        _cand.id,
+                        reward,
+                        bandit.best_arm(),
+                        bandit.means()
+                    );
+                }
+            }
+        }
     }
 
     /// Porte de correction : compile, puis exécute le harnais qui compare la

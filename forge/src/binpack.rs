@@ -70,7 +70,7 @@ fn pack(w: &[f64; 4], items: &[f64], cap: f64) -> Option<usize> {
                 if !p.is_finite() {
                     return None;
                 }
-                if best.map_or(true, |(_, bp)| p > bp) {
+                if best.is_none_or(|(_, bp)| p > bp) {
                     best = Some((i, p));
                 }
             }
@@ -172,7 +172,7 @@ mod tests {
             for (i, &rem) in remaining.iter().enumerate() {
                 if rem + 1e-9 >= it {
                     let p = priority(&w, it, rem, cap);
-                    if best.map_or(true, |(_, bp)| p > bp) {
+                    if best.is_none_or(|(_, bp)| p > bp) {
                         best = Some((i, p));
                     }
                 }

@@ -8,7 +8,7 @@
 //! à des Workers distants via un pool dynamique avec leasing pull-based et
 //! failover automatique pour éliminer l'effet straggler.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
@@ -19,7 +19,7 @@ use std::time::Duration;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use rayon::prelude::*;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::cache::EvaluationCache;
 use crate::candidate::Candidate;
@@ -72,8 +72,7 @@ impl<C: Candidate + Serialize + for<'a> Deserialize<'a>> Checkpoint<C> {
     pub fn save_atomic(&self, path: &Path) -> std::io::Result<()> {
         let tmp_path = path.with_extension("tmp");
         let mut file = File::create(&tmp_path)?;
-        let json = serde_json::to_string_pretty(self)
-            .map_err(std::io::Error::other)?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
 
         file.write_all(json.as_bytes())?;
         file.sync_all()?; // Force le flush sur le support physique (NVMe)
@@ -85,8 +84,7 @@ impl<C: Candidate + Serialize + for<'a> Deserialize<'a>> Checkpoint<C> {
     #[allow(dead_code)]
     pub fn load(path: &Path) -> std::io::Result<Self> {
         let data = fs::read_to_string(path)?;
-        serde_json::from_str(&data)
-            .map_err(std::io::Error::other)
+        serde_json::from_str(&data).map_err(std::io::Error::other)
     }
 }
 
@@ -112,9 +110,8 @@ impl<C: Candidate + Serialize + for<'a> Deserialize<'a>> EngineState<C> {
     /// Commit atomique de l'état dans un bucket Sled dédié.
     pub fn commit_to_sled(&self, registry: &AlgorithmRegistry) -> Result<()> {
         let key = b"__engine_checkpoint__";
-        let payload = serde_json::to_vec(self).map_err(|e| {
-            ForgeError::Evaluation(format!("Sérialisation EngineState: {e}"))
-        })?;
+        let payload = serde_json::to_vec(self)
+            .map_err(|e| ForgeError::Evaluation(format!("Sérialisation EngineState: {e}")))?;
         registry.commit_raw(key, &payload)
     }
 
@@ -267,8 +264,7 @@ where
             self.initial_archive.clone().unwrap_or_default();
         let mut history: Vec<f64> = self.initial_history.clone();
         let mut final_baseline: Option<Score> = None;
-        let all_failure_diagnostics_mutex =
-            Mutex::new(Vec::<FailureDiagnostics>::new());
+        let all_failure_diagnostics_mutex = Mutex::new(Vec::<FailureDiagnostics>::new());
 
         // Pool de workers dynamique pour le mode distribué
         let worker_pool: Option<Arc<WorkerPool>> = self
@@ -277,6 +273,10 @@ where
             .as_ref()
             .filter(|addrs| !addrs.is_empty())
             .map(|addrs| Arc::new(WorkerPool::new(addrs.clone())));
+
+        // Lignage temporaire d'une génération pour attribuer le feedback
+        // mutation au bon parent, sans comparer des scores de trials différents.
+        let mut parent_by_child: HashMap<CandidateId, CandidateId> = HashMap::new();
 
         let start_gen = self.start_generation;
         for g in start_gen..self.config.generations {
@@ -315,7 +315,7 @@ where
                         .map(|cand| {
                             // Hit cache ?
                             if let Some(ref cache) = self.cache {
-                                if let Some(objs) = cache.get(cand.id()) {
+                                if let Some(objs) = cache.get_scoped(self.domain.name(), cand.id(), trial.seed) {
                                     return Individual {
                                         cand: cand.clone(),
                                         score: Score::valid(objs),
@@ -328,7 +328,7 @@ where
                                     // Insertion cache
                                     if score.valid {
                                         if let Some(ref cache) = self.cache {
-                                            cache.insert(cand.id(), score.objectives.clone());
+                                            cache.insert_scoped(self.domain.name(), cand.id(), trial.seed, score.objectives.clone());
                                         }
                                     }
                                     Individual { cand: cand.clone(), score }
@@ -343,11 +343,29 @@ where
                         })
                         .collect::<Vec<_>>()
                 };
-                match rayon::ThreadPoolBuilder::new().num_threads(eval_threads).build() {
+                match rayon::ThreadPoolBuilder::new()
+                    .num_threads(eval_threads)
+                    .build()
+                {
                     Ok(eval_pool) => eval_pool.install(eval_closure),
                     Err(_) => eval_closure(),
                 }
             };
+
+            // Le parent survivant est lui aussi évalué dans cette population :
+            // le reward compare donc enfant et parent sur exactement le même Trial.
+            let scores_by_id: HashMap<CandidateId, Score> = evaluated
+                .iter()
+                .map(|ind| (ind.cand.id(), ind.score.clone()))
+                .collect();
+            for ind in &evaluated {
+                let parent_score = parent_by_child
+                    .get(&ind.cand.id())
+                    .and_then(|parent_id| scores_by_id.get(parent_id));
+                self.domain
+                    .observe_evaluation(&ind.cand, &ind.score, parent_score);
+            }
+            parent_by_child.clear();
 
             let mut valids: Vec<Individual<D::Cand>> = evaluated
                 .into_iter()
@@ -357,7 +375,12 @@ where
             final_baseline = Some(self.domain.baseline(&trial)?);
 
             valids.sort_by(|a, b| cmp_primary(&a.score, &b.score));
-            history.push(valids.first().map(|i| i.score.objectives[0]).unwrap_or(f64::INFINITY));
+            history.push(
+                valids
+                    .first()
+                    .map(|i| i.score.objectives[0])
+                    .unwrap_or(f64::INFINITY),
+            );
 
             archive.append(&mut valids);
             let mut seen: HashSet<u64> = HashSet::new();
@@ -365,6 +388,27 @@ where
 
             sort_by_pareto_domination(&mut archive);
             archive.truncate(self.config.survivors.max(1));
+
+            // Reproduction déterministe par génération. Le checkpoint est écrit
+            // après cette étape afin de contenir exactement la population de g+1.
+            let survivors: Vec<D::Cand> = archive.iter().map(|i| i.cand.clone()).collect();
+            let mut reproduction_rng = StdRng::seed_from_u64(trial.seed ^ 0xA5A5_5A5A_D3C4_B2E1);
+            if survivors.is_empty() {
+                pop = (0..self.config.population)
+                    .map(|_| self.domain.seed(&mut reproduction_rng))
+                    .collect();
+            } else {
+                let mut next: Vec<D::Cand> = survivors.clone();
+                while next.len() < self.config.population {
+                    let parent = &survivors[reproduction_rng.gen_range(0..survivors.len())];
+                    let child = self.domain.mutate(&mut reproduction_rng, &[parent])?;
+                    if child.id() != parent.id() {
+                        parent_by_child.insert(child.id(), parent.id());
+                    }
+                    next.push(child);
+                }
+                pop = next;
+            }
 
             // ── Checkpoint atomique Sled ──
             if let Some(ref reg) = self.registry {
@@ -379,42 +423,39 @@ where
                         .map(|fd| fd.clone())
                         .unwrap_or_default(),
                 };
-                let _ = state.commit_to_sled(reg);
+                state.commit_to_sled(reg)?;
             }
 
-            // Checkpoint JSON legacy
+            // Checkpoint JSON legacy : non critique, mais jamais silencieux.
             let cp = Checkpoint {
                 generation: g,
                 config: self.config.clone(),
                 archive: archive.clone(),
             };
-            let _ = cp.save_atomic(Path::new("forge_checkpoint.json"));
+            if let Err(e) = cp.save_atomic(Path::new("forge_checkpoint.json")) {
+                eprintln!("[forge:checkpoint] échec checkpoint JSON: {e}");
+            }
 
             if let Some(ref cache) = self.cache {
                 if g % 10 == 0 {
-                    let _ = cache.persist();
+                    if let Err(e) = cache.persist() {
+                        eprintln!("[forge:cache] échec persistance cache: {e}");
+                    }
                 }
             }
-
-            // Reproduction
-            let survivors: Vec<D::Cand> = archive.iter().map(|i| i.cand.clone()).collect();
-            if survivors.is_empty() {
-                pop = (0..self.config.population)
-                    .map(|_| self.domain.seed(&mut master))
-                    .collect();
-                continue;
-            }
-
-            let mut next: Vec<D::Cand> = survivors.clone();
-            while next.len() < self.config.population {
-                let parent = &survivors[master.gen_range(0..survivors.len())];
-                next.push(self.domain.mutate(&mut master, &[parent])?);
-            }
-            pop = next;
         }
 
-        let final_front = archive.clone();
-        let best = archive.into_iter().next();
+        let best = archive.first().cloned();
+        let final_front: Vec<Individual<D::Cand>> = archive
+            .iter()
+            .filter(|candidate| {
+                !archive.iter().any(|other| {
+                    other.cand.id() != candidate.cand.id()
+                        && other.score.dominates(&candidate.score)
+                })
+            })
+            .cloned()
+            .collect();
         let (holdout_best, holdout_baseline) = match &best {
             Some(b) => {
                 let holdout = Trial {
@@ -511,7 +552,9 @@ impl WorkerPool {
 
         best_idx.map(|i| {
             self.slots[i].active_tasks.fetch_add(1, Ordering::Relaxed);
-            self.slots[i]._total_assigned.fetch_add(1, Ordering::Relaxed);
+            self.slots[i]
+                ._total_assigned
+                .fetch_add(1, Ordering::Relaxed);
             self.slots[i].addr.clone()
         })
     }
@@ -564,6 +607,7 @@ impl WorkerPool {
 /// Chaque thread Rayon loue un worker, tente l'évaluation, et en cas d'échec
 /// réseau ré-essaie sur un autre worker. Si tous les workers sont morts,
 /// bascule sur une évaluation locale de secours.
+#[allow(clippy::too_many_arguments)]
 fn evaluate_distributed_dynamic<C: Candidate>(
     domain: &impl Domain<Cand = C>,
     population: &[C],
@@ -583,8 +627,8 @@ fn evaluate_distributed_dynamic<C: Candidate>(
         .par_iter()
         .map(|cand| {
             // Hit cache ?
-            if let Some(ref c) = cache {
-                if let Some(objs) = c.get(cand.id()) {
+            if let Some(c) = cache {
+                if let Some(objs) = c.get_scoped(domain.name(), cand.id(), trial.seed) {
                     return Individual {
                         cand: cand.clone(),
                         score: Score::valid(objs),
@@ -600,9 +644,11 @@ fn evaluate_distributed_dynamic<C: Candidate>(
                     Some(addr) => addr,
                     None => {
                         // Aucun worker sain → fallback local silencieux
-                        let score = evaluate(domain, cand, trial)
-                            .unwrap_or(Score::invalid());
-                        return Individual { cand: cand.clone(), score };
+                        let score = evaluate(domain, cand, trial).unwrap_or(Score::invalid());
+                        return Individual {
+                            cand: cand.clone(),
+                            score,
+                        };
                     }
                 };
 
@@ -620,8 +666,13 @@ fn evaluate_distributed_dynamic<C: Candidate>(
 
                         if eval_res.is_valid {
                             // Insertion cache
-                            if let Some(ref c) = cache {
-                                c.insert(cand.id(), eval_res.objectives.clone());
+                            if let Some(c) = cache {
+                                c.insert_scoped(
+                                    domain.name(),
+                                    cand.id(),
+                                    trial.seed,
+                                    eval_res.objectives.clone(),
+                                );
                             }
 
                             if let Some(reg) = registry {
@@ -665,17 +716,24 @@ fn evaluate_distributed_dynamic<C: Candidate>(
                                 ));
                             }
 
-                            let score = evaluate(domain, cand, trial)
-                                .unwrap_or(Score::invalid());
+                            let score = evaluate(domain, cand, trial).unwrap_or(Score::invalid());
 
                             // Insertion cache fallback
                             if score.valid {
-                                if let Some(ref c) = cache {
-                                    c.insert(cand.id(), score.objectives.clone());
+                                if let Some(c) = cache {
+                                    c.insert_scoped(
+                                        domain.name(),
+                                        cand.id(),
+                                        trial.seed,
+                                        score.objectives.clone(),
+                                    );
                                 }
                             }
 
-                            return Individual { cand: cand.clone(), score };
+                            return Individual {
+                                cand: cand.clone(),
+                                score,
+                            };
                         }
 
                         // Ré-essayer sur un autre worker
@@ -729,7 +787,7 @@ pub fn evaluate_parallel_distributed<C: Candidate>(
         .enumerate()
         .map(|(idx, cand)| {
             // Hit cache ?
-            if let Some(ref c) = cache {
+            if let Some(c) = cache {
                 if let Some(objs) = c.get(cand.id()) {
                     return Individual {
                         cand: cand.clone(),
@@ -751,7 +809,7 @@ pub fn evaluate_parallel_distributed<C: Candidate>(
                 Ok(eval_res) => {
                     if eval_res.is_valid {
                         // Insertion cache
-                        if let Some(ref c) = cache {
+                        if let Some(c) = cache {
                             c.insert(cand.id(), eval_res.objectives.clone());
                         }
 
@@ -823,7 +881,9 @@ fn cmp_primary(a: &Score, b: &Score) -> std::cmp::Ordering {
 /// puis départage les individus d'un même front par leur Distance d'Encombrement.
 pub fn sort_by_pareto_domination<C: Candidate>(archive: &mut Vec<Individual<C>>) {
     let len = archive.len();
-    if len <= 1 { return; }
+    if len <= 1 {
+        return;
+    }
 
     let mut fronts: Vec<Vec<usize>> = Vec::new();
     let mut domination_counts = vec![0usize; len];
@@ -831,7 +891,9 @@ pub fn sort_by_pareto_domination<C: Candidate>(archive: &mut Vec<Individual<C>>)
 
     for i in 0..len {
         for j in 0..len {
-            if i == j { continue; }
+            if i == j {
+                continue;
+            }
             if archive[i].score.dominates(&archive[j].score) {
                 dominates_list[i].push(j);
             } else if archive[j].score.dominates(&archive[i].score) {
@@ -839,7 +901,9 @@ pub fn sort_by_pareto_domination<C: Candidate>(archive: &mut Vec<Individual<C>>)
             }
         }
         if domination_counts[i] == 0 {
-            if fronts.is_empty() { fronts.push(Vec::new()); }
+            if fronts.is_empty() {
+                fronts.push(Vec::new());
+            }
             fronts[0].push(i);
         }
     }
@@ -866,9 +930,13 @@ pub fn sort_by_pareto_domination<C: Candidate>(archive: &mut Vec<Individual<C>>)
 
     for front in &fronts {
         let front_len = front.len();
-        if front_len == 0 { continue; }
+        if front_len == 0 {
+            continue;
+        }
         if front_len <= 2 {
-            for &idx in front { crowding_distances[idx] = f64::INFINITY; }
+            for &idx in front {
+                crowding_distances[idx] = f64::INFINITY;
+            }
             continue;
         }
 
@@ -884,7 +952,9 @@ pub fn sort_by_pareto_domination<C: Candidate>(archive: &mut Vec<Individual<C>>)
             crowding_distances[sorted_front_indices[front_len - 1]] = f64::INFINITY;
 
             let min_val = archive[sorted_front_indices[0]].score.objectives[obj_idx];
-            let max_val = archive[sorted_front_indices[front_len - 1]].score.objectives[obj_idx];
+            let max_val = archive[sorted_front_indices[front_len - 1]]
+                .score
+                .objectives[obj_idx];
             let norm = max_val - min_val;
 
             if norm > 1e-9 {
@@ -894,8 +964,10 @@ pub fn sort_by_pareto_domination<C: Candidate>(archive: &mut Vec<Individual<C>>)
                     let curr_idx = sorted_front_indices[k];
 
                     if crowding_distances[curr_idx] != f64::INFINITY {
-                        crowding_distances[curr_idx] += (archive[next_idx].score.objectives[obj_idx]
-                            - archive[prev_idx].score.objectives[obj_idx]) / norm;
+                        crowding_distances[curr_idx] += (archive[next_idx].score.objectives
+                            [obj_idx]
+                            - archive[prev_idx].score.objectives[obj_idx])
+                            / norm;
                     }
                 }
             }
@@ -904,7 +976,9 @@ pub fn sort_by_pareto_domination<C: Candidate>(archive: &mut Vec<Individual<C>>)
 
     let mut flat_ranks = vec![0usize; len];
     for (front_rank, front) in fronts.iter().enumerate() {
-        for &idx in front { flat_ranks[idx] = front_rank; }
+        for &idx in front {
+            flat_ranks[idx] = front_rank;
+        }
     }
 
     let mut annotated: Vec<(Individual<C>, usize, f64)> = archive
@@ -914,7 +988,8 @@ pub fn sort_by_pareto_domination<C: Candidate>(archive: &mut Vec<Individual<C>>)
         .collect();
 
     annotated.sort_by(|a, b| {
-        a.1.cmp(&b.1).then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+        a.1.cmp(&b.1)
+            .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
     });
 
     archive.extend(annotated.into_iter().map(|(ind, _, _)| ind));
@@ -1049,10 +1124,7 @@ mod tests {
 
     #[test]
     fn test_worker_pool_failover() {
-        let pool = WorkerPool::new(vec![
-            "127.0.0.1:9000".into(),
-            "127.0.0.1:9001".into(),
-        ]);
+        let pool = WorkerPool::new(vec!["127.0.0.1:9000".into(), "127.0.0.1:9001".into()]);
 
         let w1 = pool.lease().unwrap();
         pool.mark_failed(&w1);
@@ -1066,7 +1138,13 @@ mod tests {
         // Après reset, tous les workers sont à nouveau sains
         pool.reset_all();
         assert!(pool.any_healthy());
-        assert_eq!(pool.slots.iter().filter(|s| !s.failed.load(Ordering::Relaxed)).count(), 2);
+        assert_eq!(
+            pool.slots
+                .iter()
+                .filter(|s| !s.failed.load(Ordering::Relaxed))
+                .count(),
+            2
+        );
     }
 
     // ---- Domaine mock : un echec d'evaluation isole ne doit pas contaminer
@@ -1075,44 +1153,85 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
-    struct MockCand { id: u64, poison: bool }
+    struct MockCand {
+        id: u64,
+        poison: bool,
+    }
     impl Candidate for MockCand {
-        fn id(&self) -> CandidateId { self.id }
-        fn repr(&self) -> String { format!("mock-{}", self.id) }
+        fn id(&self) -> CandidateId {
+            self.id
+        }
+        fn repr(&self) -> String {
+            format!("mock-{}", self.id)
+        }
     }
 
-    struct MockDomain { seed_counter: AtomicUsize }
+    struct MockDomain {
+        seed_counter: AtomicUsize,
+    }
     impl Domain for MockDomain {
         type Cand = MockCand;
-        fn name(&self) -> &str { "mock" }
+        fn name(&self) -> &str {
+            "mock"
+        }
         fn seed(&self, _rng: &mut StdRng) -> MockCand {
             // 1er candidat tire => echoue a l'eval ; les suivants sont valides.
             let i = self.seed_counter.fetch_add(1, Ordering::Relaxed);
-            MockCand { id: i as u64, poison: i == 0 }
+            MockCand {
+                id: i as u64,
+                poison: i == 0,
+            }
         }
         fn mutate(&self, _rng: &mut StdRng, _parents: &[&MockCand]) -> Result<MockCand> {
-            Ok(MockCand { id: 9999, poison: false })
+            Ok(MockCand {
+                id: 9999,
+                poison: false,
+            })
         }
         fn verify(&self, cand: &MockCand, _trial: &Trial) -> Result<bool> {
-            if cand.poison { Err(ForgeError::Evaluation("echec simule".into())) } else { Ok(true) }
+            if cand.poison {
+                Err(ForgeError::Evaluation("echec simule".into()))
+            } else {
+                Ok(true)
+            }
         }
         fn measure(&self, cand: &MockCand, _trial: &Trial) -> Result<Vec<f64>> {
             Ok(vec![cand.id as f64])
         }
-        fn objective_names(&self) -> Vec<String> { vec!["mock_obj".into()] }
-        fn baseline(&self, _trial: &Trial) -> Result<Score> { Ok(Score::valid(vec![999.0])) }
+        fn objective_names(&self) -> Vec<String> {
+            vec!["mock_obj".into()]
+        }
+        fn baseline(&self, _trial: &Trial) -> Result<Score> {
+            Ok(Score::valid(vec![999.0]))
+        }
     }
 
     #[test]
     fn eval_failure_does_not_poison_generation() {
         let config = Config {
-            generations: 1, population: 4, survivors: 3, base_seed: 7, worker_addresses: None,
+            generations: 1,
+            population: 4,
+            survivors: 3,
+            base_seed: 7,
+            worker_addresses: None,
         };
-        let domain = MockDomain { seed_counter: AtomicUsize::new(0) };
+        let domain = MockDomain {
+            seed_counter: AtomicUsize::new(0),
+        };
         let report = Engine::new(domain, config).run().expect("run ok");
         // 1 candidat sur 4 echoue ; sans le fix tout serait invalide (front vide, history INF).
-        assert!(report.best.is_some(), "un candidat valide doit survivre malgre l'echec d'un autre");
-        assert!(!report.final_front.is_empty(), "le front ne doit pas etre vide");
-        assert!(report.history[0].is_finite(), "history[0] doit etre fini, valeur={}", report.history[0]);
+        assert!(
+            report.best.is_some(),
+            "un candidat valide doit survivre malgre l'echec d'un autre"
+        );
+        assert!(
+            !report.final_front.is_empty(),
+            "le front ne doit pas etre vide"
+        );
+        assert!(
+            report.history[0].is_finite(),
+            "history[0] doit etre fini, valeur={}",
+            report.history[0]
+        );
     }
 }

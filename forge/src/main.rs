@@ -34,7 +34,10 @@ fn main() {
     };
 
     println!("=== forge :: campagne domaine `binpack` ===");
-    println!("(generations={}, population={}, survivants={})\n", config.generations, config.population, config.survivors);
+    println!(
+        "(generations={}, population={}, survivants={})\n",
+        config.generations, config.population, config.survivors
+    );
 
     for (g, h) in report.history.iter().enumerate() {
         if g % 5 == 0 || g + 1 == report.history.len() {
@@ -57,7 +60,9 @@ fn main() {
             let bl = hbl.objectives[0];
             let gain = if bl > 0.0 { 100.0 * (bl - b) / bl } else { 0.0 };
             println!("\n  [HOLDOUT — graine jamais vue pendant l'evolution]");
-            println!("  baseline avg_bins = {bl:.3}  |  evoluee avg_bins = {b:.3}  |  gain {gain:+.1}%");
+            println!(
+                "  baseline avg_bins = {bl:.3}  |  evoluee avg_bins = {b:.3}  |  gain {gain:+.1}%"
+            );
             println!("  => gain conserve sur le holdout : l'amelioration generalise (pas d'over-fit au benchmark).");
         }
         _ => println!("\n  [HOLDOUT] candidat invalide ou absent."),

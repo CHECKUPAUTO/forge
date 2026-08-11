@@ -1,7 +1,8 @@
 [package]
 name = "forge-cli"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "CLI d'administration et d'analytics pour forge-core — extraction du front de Pareto, checkpointing et reprise sur crash."
 
 [[bin]]
@@ -12,6 +13,3 @@ path = "src/main.rs"
 forge-core = { path = "../forge-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-[workspace]
-license = "LicenseRef-CheckupAuto-Dual"

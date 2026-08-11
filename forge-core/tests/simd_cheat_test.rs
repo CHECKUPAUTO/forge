@@ -15,8 +15,14 @@ fn cheat_kernel_is_rejected() {
     // Ignore a et b, écrit la constante que l'ancien harnais attendait.
     let cheat = "pub fn compute_kernel(c: &mut [f64], _a: &[f64], _b: &[f64], n: usize) {\n    \
                  for x in c.iter_mut() { *x = n as f64; }\n}\n";
-    let cand = SimdKernelCode { source: cheat.to_string(), id: fnv1a(cheat) };
-    let trial = Trial { generation: 0, seed: 123 };
+    let cand = SimdKernelCode {
+        source: cheat.to_string(),
+        id: fnv1a(cheat),
+    };
+    let trial = Trial {
+        generation: 0,
+        seed: 123,
+    };
 
     let ok = domain
         .verify(&cand, &trial)
@@ -31,7 +37,10 @@ fn cheat_kernel_is_rejected() {
 fn honest_baseline_passes() {
     let domain = SimdKernelDomain::new("/tmp/forge_simd_honest");
     let cand = domain.seed(&mut rand::rngs::StdRng::seed_from_u64(0)); // GEMM naïf de référence
-    let trial = Trial { generation: 1, seed: 777 };
+    let trial = Trial {
+        generation: 1,
+        seed: 777,
+    };
 
     let ok = domain
         .verify(&cand, &trial)

@@ -2,18 +2,20 @@
 
 /// Retourne l'index dans le front du candidat elite (holdout-verifie, bat le baseline sur objective 0).
 /// Necessite C: Clone + Candidate car Individual n'est pas Clone par defaut.
-pub fn find_elite_index<C: crate::Candidate + Clone>(
-    report: &crate::Report<C>,
-) -> Option<usize> {
-    let baseline_val = report.final_baseline.as_ref()
-        .and_then(|b| b.objectives.get(0).copied())
+pub fn find_elite_index<C: crate::Candidate + Clone>(report: &crate::Report<C>) -> Option<usize> {
+    let baseline_val = report
+        .final_baseline
+        .as_ref()
+        .and_then(|b| b.objectives.first().copied())
         .unwrap_or(f64::INFINITY);
 
     let mut best_idx = None;
     let mut best_score = f64::INFINITY;
 
     for (i, ind) in report.final_front.iter().enumerate() {
-        if !report.final_front_holdout.get(i)
+        if !report
+            .final_front_holdout
+            .get(i)
             .and_then(|o| o.as_ref())
             .map(|s| s.valid)
             .unwrap_or(false)

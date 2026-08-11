@@ -71,12 +71,8 @@ impl LlmMutator {
         // Injection de la boucle de rétroaction (Self-Correction Loop)
         if let Some(diag) = diagnostics {
             let stage_desc = match diag.stage {
-                crate::diagnostics::FailureStage::Compilation => {
-                    "Compilation (cargo build/check)"
-                }
-                crate::diagnostics::FailureStage::Execution => {
-                    "Execution (Benchmark runtime)"
-                }
+                crate::diagnostics::FailureStage::Compilation => "Compilation (cargo build/check)",
+                crate::diagnostics::FailureStage::Execution => "Execution (Benchmark runtime)",
                 crate::diagnostics::FailureStage::Verification => {
                     "Verification Mathematique (cargo run)"
                 }
@@ -110,15 +106,11 @@ impl LlmMutator {
             .timeout(Duration::from_secs(self.timeout_secs))
             .send_json(body)
             .map_err(|e| {
-                ForgeError::Mutation(format!(
-                    "Impossible de joindre le LLM local (Ollama) : {e}"
-                ))
+                ForgeError::Mutation(format!("Impossible de joindre le LLM local (Ollama) : {e}"))
             })?
             .into_json()
             .map_err(|e| {
-                ForgeError::Mutation(format!(
-                    "Reponse du LLM non-parsable (JSON invalide) : {e}"
-                ))
+                ForgeError::Mutation(format!("Reponse du LLM non-parsable (JSON invalide) : {e}"))
             })?;
 
         let raw_output = response["response"]
@@ -130,9 +122,7 @@ impl LlmMutator {
             })?;
 
         extract_code_block(raw_output).ok_or_else(|| {
-            ForgeError::Evaluation(
-                "Le LLM n'a pas renvoye de bloc de code ```rust ... ```".into(),
-            )
+            ForgeError::Evaluation("Le LLM n'a pas renvoye de bloc de code ```rust ... ```".into())
         })
     }
 }

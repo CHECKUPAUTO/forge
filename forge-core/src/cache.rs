@@ -1,9 +1,9 @@
-//! Cache d'évaluation persistant thread-safe pour intercepter les candidats redondants.
+//! Cache d'évaluation persistant et thread-safe.
 //!
-//! Chaque candidat est identifié par son `CandidateId` (hash FNV-1a de sa
-//! représentation textuelle). Avant d'évaluer un candidat, le moteur consulte
-//! le cache ; s'il y a un hit, l'évaluation est court-circuitée. La persistance
-//! est atomique (write-tmp + sync + rename) pour survivre aux crashs.
+//! Un score n'est réutilisable que dans le même contexte d'évaluation : domaine,
+//! graine de trial et environnement matériel/logique. Le précédent cache indexé
+//! uniquement par `CandidateId` pouvait réutiliser le score d'une génération
+//! précédente malgré la rotation des entrées, ce qui invalidait l'anti-overfit.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -15,47 +15,110 @@ use serde::{Deserialize, Serialize};
 
 use crate::candidate::CandidateId;
 
-/// Le store sérialisable sur disque.
-#[derive(Serialize, Deserialize, Default)]
+const CACHE_SCHEMA_VERSION: u32 = 2;
+
+#[derive(Serialize, Deserialize)]
 pub struct CacheStore {
-    pub records: HashMap<CandidateId, Vec<f64>>,
+    #[serde(default = "cache_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub records: HashMap<String, Vec<f64>>,
 }
 
-/// Cache d'évaluation thread-safe avec persistance sur NVMe.
+const fn cache_schema_version() -> u32 {
+    CACHE_SCHEMA_VERSION
+}
+
+impl Default for CacheStore {
+    fn default() -> Self {
+        Self {
+            schema_version: CACHE_SCHEMA_VERSION,
+            records: HashMap::new(),
+        }
+    }
+}
+
 pub struct EvaluationCache {
     store: RwLock<CacheStore>,
     persistent_path: String,
+    environment_fingerprint: String,
 }
 
 impl EvaluationCache {
-    /// Ouvre ou crée un cache persistant au chemin donné.
     pub fn new(path: &str) -> Self {
         let store = if Path::new(path).exists() {
             Self::load_from_disk(path).unwrap_or_default()
         } else {
             CacheStore::default()
         };
-        EvaluationCache {
+        Self {
             store: RwLock::new(store),
             persistent_path: path.to_string(),
+            environment_fingerprint: Self::default_environment_fingerprint(),
         }
     }
 
-    /// Récupère les objectifs stockés pour un candidat, s'il existe.
-    pub fn get(&self, id: CandidateId) -> Option<Vec<f64>> {
-        let reader = self.store.read().ok()?;
-        reader.records.get(&id).cloned()
+    /// Permet à une campagne d'ajouter un identifiant matériel/toolchain plus
+    /// précis (ex. hash de `rustc -Vv`, CPU/GPU, flags) sans changer le format.
+    pub fn with_environment_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
+        self.environment_fingerprint = fingerprint.into();
+        self
     }
 
-    /// Insère un nouveau résultat dans le cache (en mémoire uniquement —
-    /// appeler `persist()` pour écrire sur disque).
-    pub fn insert(&self, id: CandidateId, objectives: Vec<f64>) {
+    fn default_environment_fingerprint() -> String {
+        let namespace = std::env::var("FORGE_CACHE_ENV").unwrap_or_else(|_| "default".into());
+        format!(
+            "forge-core:{}:{}:{}:{}",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            namespace
+        )
+    }
+
+    pub fn scoped_key(&self, domain: &str, candidate_id: CandidateId, trial_seed: u64) -> String {
+        format!(
+            "v{CACHE_SCHEMA_VERSION}|{}|{domain}|{trial_seed:016x}|{candidate_id:016x}",
+            self.environment_fingerprint
+        )
+    }
+
+    pub fn get_scoped(
+        &self,
+        domain: &str,
+        candidate_id: CandidateId,
+        trial_seed: u64,
+    ) -> Option<Vec<f64>> {
+        let key = self.scoped_key(domain, candidate_id, trial_seed);
+        self.store.read().ok()?.records.get(&key).cloned()
+    }
+
+    pub fn insert_scoped(
+        &self,
+        domain: &str,
+        candidate_id: CandidateId,
+        trial_seed: u64,
+        objectives: Vec<f64>,
+    ) {
+        if objectives.is_empty() || !objectives.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        let key = self.scoped_key(domain, candidate_id, trial_seed);
         if let Ok(mut writer) = self.store.write() {
-            writer.records.insert(id, objectives);
+            writer.records.insert(key, objectives);
         }
     }
 
-    /// Persiste le cache sur disque de manière atomique (tmp + sync + rename).
+    /// Compatibilité API avec l'ancien moteur. Un lookup non contextualisé est
+    /// volontairement refusé : mieux vaut réévaluer que réutiliser un score
+    /// issu d'un autre trial ou d'une autre machine.
+    pub fn get(&self, _id: CandidateId) -> Option<Vec<f64>> {
+        None
+    }
+
+    /// Compatibilité API : aucune valeur non contextualisée n'est persistée.
+    pub fn insert(&self, _id: CandidateId, _objectives: Vec<f64>) {}
+
     pub fn persist(&self) -> std::io::Result<()> {
         let reader = self
             .store
@@ -65,9 +128,7 @@ impl EvaluationCache {
         let file = File::create(&tmp_path)?;
         let mut writer = BufWriter::new(file);
 
-        serde_json::to_writer(&mut writer, &*reader)
-            .map_err(std::io::Error::other)?;
-
+        serde_json::to_writer(&mut writer, &*reader).map_err(std::io::Error::other)?;
         writer.into_inner()?.sync_all()?;
         std::fs::rename(tmp_path, &self.persistent_path)?;
         Ok(())
@@ -77,7 +138,10 @@ impl EvaluationCache {
         let mut file = File::open(path)?;
         let mut content = String::new();
         file.read_to_string(&mut content)?;
-        serde_json::from_str(&content)
-            .map_err(std::io::Error::other)
+        let store: CacheStore = serde_json::from_str(&content).map_err(std::io::Error::other)?;
+        if store.schema_version != CACHE_SCHEMA_VERSION {
+            return Ok(CacheStore::default());
+        }
+        Ok(store)
     }
 }

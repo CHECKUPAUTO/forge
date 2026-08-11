@@ -3,11 +3,11 @@
 //! supervisé par un garde-fou (timeout) afin de protéger le moteur principal
 //! contre les boucles infinies, paniques ou corruptions de mémoire.
 
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
-use std::thread;
-use std::io::Read;
 use crate::error::{ForgeError, Result};
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 /// Exécute une commande système (ex: `cargo bench`) avec un timeout strict.
 /// Retourne la sortie standard (stdout) en cas de succès, coupe le processus
@@ -18,7 +18,9 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| ForgeError::Evaluation(format!("Impossible de spawn le processus candidat: {e}")))?;
+        .map_err(|e| {
+            ForgeError::Evaluation(format!("Impossible de spawn le processus candidat: {e}"))
+        })?;
 
     let start = Instant::now();
 
@@ -59,7 +61,9 @@ pub fn run_with_timeout(mut cmd: Command, timeout: Duration) -> Result<String> {
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(ForgeError::Evaluation(format!("Erreur système d'interrogation de processus: {e}")));
+                return Err(ForgeError::Evaluation(format!(
+                    "Erreur système d'interrogation de processus: {e}"
+                )));
             }
         }
     }
@@ -89,17 +93,13 @@ pub fn run_with_secure_limits(
                 .set(max_memory_bytes, max_memory_bytes)
                 .is_err()
             {
-                return Err(std::io::Error::other(
-                    "rlimit RAM fail",
-                ));
+                return Err(std::io::Error::other("rlimit RAM fail"));
             }
             if rlimit::Resource::FSIZE
                 .set(max_file_size_bytes, max_file_size_bytes)
                 .is_err()
             {
-                return Err(std::io::Error::other(
-                    "rlimit Disque fail",
-                ));
+                return Err(std::io::Error::other("rlimit Disque fail"));
             }
             Ok(())
         });
