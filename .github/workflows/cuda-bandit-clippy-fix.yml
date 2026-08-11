@@ -32,9 +32,7 @@ jobs:
 
           for name in ["run_campaign.rs", "run_simd.rs", "run_cuda.rs"]:
               path = Path("forge-core/src/bin") / name
-              text = path.read_text()
-              text = text.replace(".objectives.get(0)", ".objectives.first()")
-              text = text.replace("o.get(0)", "o.first()")
+              text = path.read_text().replace(".get(0)", ".first()")
               path.write_text(text)
       - name: Validate strict bandit path
         run: |
