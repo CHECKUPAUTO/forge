@@ -18,6 +18,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
+      - name: Repair migration script escaping
+        run: python3 tools/fix_hardening_script.py
       - name: Apply migration
         run: python3 tools/hardening_migrate.py
       - name: Format
