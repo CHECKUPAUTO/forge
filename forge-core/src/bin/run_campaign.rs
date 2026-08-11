@@ -38,14 +38,14 @@ fn main() {
             );
             for (i, ind) in report.final_front.iter().enumerate() {
                 let o = &ind.score.objectives;
-                let g0 = o.get(0).copied().unwrap_or(f64::NAN);
+                let g0 = o.first().copied().unwrap_or(f64::NAN);
                 let g1 = o.get(1).copied().unwrap_or(f64::NAN);
                 let g2 = o.get(2).copied().unwrap_or(f64::NAN);
                 println!("  [{i}] L2={g0:.3e}  latency_ns={g1:.0}  params={g2:.0}");
             }
             if let Some(bl) = report.final_baseline.as_ref() {
                 let o = &bl.objectives;
-                let g0 = o.get(0).copied().unwrap_or(f64::NAN);
+                let g0 = o.first().copied().unwrap_or(f64::NAN);
                 let g1 = o.get(1).copied().unwrap_or(f64::NAN);
                 let g2 = o.get(2).copied().unwrap_or(f64::NAN);
                 println!("  baseline  L2={g0:.3e}  latency_ns={g1:.0}  params={g2:.0}");
@@ -64,7 +64,7 @@ fn main() {
                     let train_l2 = ind
                         .score
                         .objectives
-                        .get(0)
+                        .first()
                         .copied()
                         .unwrap_or(f64::INFINITY);
                     let hold_ok = report
@@ -73,7 +73,7 @@ fn main() {
                         .and_then(|o| o.as_ref())
                         .map(|sc| {
                             sc.valid
-                                && sc.objectives.get(0).copied().unwrap_or(f64::INFINITY) <= L2_TOL
+                                && sc.objectives.first().copied().unwrap_or(f64::INFINITY) <= L2_TOL
                         })
                         .unwrap_or(false);
                     train_l2 <= L2_TOL && hold_ok
@@ -90,7 +90,7 @@ fn main() {
                 {
                     use std::fmt::Write as _;
                     let params = e.score.objectives.get(2).copied().unwrap_or(f64::NAN);
-                    let l2 = e.score.objectives.get(0).copied().unwrap_or(f64::NAN);
+                    let l2 = e.score.objectives.first().copied().unwrap_or(f64::NAN);
                     let ratio = baseline_params / params;
                     let src = e.cand.repr();
                     let dir = std::path::Path::new("/tmp/forge_elite");

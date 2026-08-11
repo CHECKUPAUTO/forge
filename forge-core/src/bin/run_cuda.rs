@@ -37,7 +37,7 @@ fn main() {
                 report.final_front.len()
             );
             for (i, ind) in report.final_front.iter().enumerate() {
-                let lat = ind.score.objectives.get(0).copied().unwrap_or(f64::NAN);
+                let lat = ind.score.objectives.first().copied().unwrap_or(f64::NAN);
                 let ptx = ind.score.objectives.get(1).copied().unwrap_or(f64::NAN);
                 let hold = report
                     .final_front_holdout
@@ -45,7 +45,7 @@ fn main() {
                     .and_then(|o| o.as_ref())
                     .map(|s| {
                         if s.valid {
-                            format!("{:.0}", s.objectives.get(0).copied().unwrap_or(f64::NAN))
+                            format!("{:.0}", s.objectives.first().copied().unwrap_or(f64::NAN))
                         } else {
                             "INVALIDE".to_string()
                         }
@@ -56,14 +56,14 @@ fn main() {
             if let Some(bl) = report.final_baseline.as_ref() {
                 println!(
                     "  baseline  latency_ns={:.0}  ptx={:.0}",
-                    bl.objectives.get(0).copied().unwrap_or(f64::NAN),
+                    bl.objectives.first().copied().unwrap_or(f64::NAN),
                     bl.objectives.get(1).copied().unwrap_or(f64::NAN)
                 );
             }
             let baseline_lat = report
                 .final_baseline
                 .as_ref()
-                .and_then(|b| b.objectives.get(0).copied())
+                .and_then(|b| b.objectives.first().copied())
                 .unwrap_or(f64::INFINITY);
             let elite = report
                 .final_front
@@ -78,17 +78,17 @@ fn main() {
                         .unwrap_or(false)
                 })
                 .min_by(|(_, a), (_, b)| {
-                    let la = a.score.objectives.get(0).copied().unwrap_or(f64::INFINITY);
-                    let lb = b.score.objectives.get(0).copied().unwrap_or(f64::INFINITY);
+                    let la = a.score.objectives.first().copied().unwrap_or(f64::INFINITY);
+                    let lb = b.score.objectives.first().copied().unwrap_or(f64::INFINITY);
                     la.partial_cmp(&lb).unwrap_or(std::cmp::Ordering::Equal)
                 });
             match elite {
                 Some((_, e))
-                    if e.score.objectives.get(0).copied().unwrap_or(f64::INFINITY)
+                    if e.score.objectives.first().copied().unwrap_or(f64::INFINITY)
                         < baseline_lat =>
                 {
                     use std::fmt::Write as _;
-                    let lat = e.score.objectives.get(0).copied().unwrap_or(f64::NAN);
+                    let lat = e.score.objectives.first().copied().unwrap_or(f64::NAN);
                     let ptx = e.score.objectives.get(1).copied().unwrap_or(f64::NAN);
                     let speedup = baseline_lat / lat;
                     let src = e.cand.repr();

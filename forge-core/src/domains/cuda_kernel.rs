@@ -241,8 +241,6 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         c[row * n + col] = acc;
     }
 }"#;
-        let objectives = vec![OBJ.to_string(), OBJ_WEAK.to_string()];
-
         #[cfg(feature = "bandit")]
         {
             if matches!(std::env::var("FORGE_MAB").as_deref(), Ok("1")) {
