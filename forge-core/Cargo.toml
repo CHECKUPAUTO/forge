@@ -1,7 +1,8 @@
 [package]
 name = "forge-core"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "Moteur de recherche evolutionnaire d'algorithmes pilote par execution. Terrain d'execution: scirust."
 
 [dependencies]
@@ -20,8 +21,6 @@ default = []
 llm = ["dep:ureq"]
 bandit = ["llm"]
 
-[workspace]
-
 [[bin]]
 name = "run_campaign"
 path = "src/bin/run_campaign.rs"
@@ -36,4 +35,3 @@ required-features = ["llm"]
 name = "run_cuda"
 path = "src/bin/run_cuda.rs"
 required-features = ["llm"]
-license = "LicenseRef-CheckupAuto-Dual"
