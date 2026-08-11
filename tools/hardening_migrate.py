@@ -22,12 +22,7 @@ replace(
     "let payload: EvaluationPayload = read_frame(&mut stream);",
 )
 
-# Registry warning.
-replace(
-    "forge-core/src/registry.rs",
-    "Ok((key, ivec)) if key.as_ref().starts_with(SYSTEM_PREFIX) => None,",
-    "Ok((key, _ivec)) if key.as_ref().starts_with(SYSTEM_PREFIX) => None,",
-)
+# Registry warning already migrated.
 
 # Context-aware cache, deterministic post-reproduction checkpoint, true Pareto front.
 p = Path("forge-core/src/evolve.rs")
@@ -230,7 +225,7 @@ new = '''const BANNED_CAPABILITIES: &[&str] = &[
     "include_bytes",
     "include_str",
     "unsafe",
-    "extern \"C\"",
+    "extern \\\"C\\\"",
 ];
 
 /// Défense en profondeur contre les canaux cachés évidents. Ceci n'est PAS

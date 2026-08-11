@@ -311,7 +311,7 @@ where
                         .map(|cand| {
                             // Hit cache ?
                             if let Some(ref cache) = self.cache {
-                                if let Some(objs) = cache.get(cand.id()) {
+                                if let Some(objs) = cache.get_scoped(self.domain.name(), cand.id(), trial.seed) {
                                     return Individual {
                                         cand: cand.clone(),
                                         score: Score::valid(objs),
@@ -324,7 +324,7 @@ where
                                     // Insertion cache
                                     if score.valid {
                                         if let Some(ref cache) = self.cache {
-                                            cache.insert(cand.id(), score.objectives.clone());
+                                            cache.insert_scoped(self.domain.name(), cand.id(), trial.seed, score.objectives.clone());
                                         }
                                     }
                                     Individual { cand: cand.clone(), score }
@@ -370,6 +370,23 @@ where
             sort_by_pareto_domination(&mut archive);
             archive.truncate(self.config.survivors.max(1));
 
+            // Reproduction déterministe par génération. Le checkpoint est écrit
+            // après cette étape afin de contenir exactement la population de g+1.
+            let survivors: Vec<D::Cand> = archive.iter().map(|i| i.cand.clone()).collect();
+            let mut reproduction_rng = StdRng::seed_from_u64(trial.seed ^ 0xA5A5_5A5A_D3C4_B2E1);
+            if survivors.is_empty() {
+                pop = (0..self.config.population)
+                    .map(|_| self.domain.seed(&mut reproduction_rng))
+                    .collect();
+            } else {
+                let mut next: Vec<D::Cand> = survivors.clone();
+                while next.len() < self.config.population {
+                    let parent = &survivors[reproduction_rng.gen_range(0..survivors.len())];
+                    next.push(self.domain.mutate(&mut reproduction_rng, &[parent])?);
+                }
+                pop = next;
+            }
+
             // ── Checkpoint atomique Sled ──
             if let Some(ref reg) = self.registry {
                 let state = EngineState {
@@ -383,42 +400,39 @@ where
                         .map(|fd| fd.clone())
                         .unwrap_or_default(),
                 };
-                let _ = state.commit_to_sled(reg);
+                state.commit_to_sled(reg)?;
             }
 
-            // Checkpoint JSON legacy
+            // Checkpoint JSON legacy : non critique, mais jamais silencieux.
             let cp = Checkpoint {
                 generation: g,
                 config: self.config.clone(),
                 archive: archive.clone(),
             };
-            let _ = cp.save_atomic(Path::new("forge_checkpoint.json"));
+            if let Err(e) = cp.save_atomic(Path::new("forge_checkpoint.json")) {
+                eprintln!("[forge:checkpoint] échec checkpoint JSON: {e}");
+            }
 
             if let Some(ref cache) = self.cache {
                 if g % 10 == 0 {
-                    let _ = cache.persist();
+                    if let Err(e) = cache.persist() {
+                        eprintln!("[forge:cache] échec persistance cache: {e}");
+                    }
                 }
             }
-
-            // Reproduction
-            let survivors: Vec<D::Cand> = archive.iter().map(|i| i.cand.clone()).collect();
-            if survivors.is_empty() {
-                pop = (0..self.config.population)
-                    .map(|_| self.domain.seed(&mut master))
-                    .collect();
-                continue;
-            }
-
-            let mut next: Vec<D::Cand> = survivors.clone();
-            while next.len() < self.config.population {
-                let parent = &survivors[master.gen_range(0..survivors.len())];
-                next.push(self.domain.mutate(&mut master, &[parent])?);
-            }
-            pop = next;
         }
 
-        let final_front = archive.clone();
-        let best = archive.into_iter().next();
+        let best = archive.first().cloned();
+        let final_front: Vec<Individual<D::Cand>> = archive
+            .iter()
+            .filter(|candidate| {
+                !archive.iter().any(|other| {
+                    other.cand.id() != candidate.cand.id()
+                        && other.score.dominates(&candidate.score)
+                })
+            })
+            .cloned()
+            .collect();
         let (holdout_best, holdout_baseline) = match &best {
             Some(b) => {
                 let holdout = Trial {
@@ -590,7 +604,7 @@ fn evaluate_distributed_dynamic<C: Candidate>(
         .map(|cand| {
             // Hit cache ?
             if let Some(ref c) = cache {
-                if let Some(objs) = c.get(cand.id()) {
+                if let Some(objs) = c.get_scoped(domain.name(), cand.id(), trial.seed) {
                     return Individual {
                         cand: cand.clone(),
                         score: Score::valid(objs),
@@ -629,7 +643,12 @@ fn evaluate_distributed_dynamic<C: Candidate>(
                         if eval_res.is_valid {
                             // Insertion cache
                             if let Some(ref c) = cache {
-                                c.insert(cand.id(), eval_res.objectives.clone());
+                                c.insert_scoped(
+                                    domain.name(),
+                                    cand.id(),
+                                    trial.seed,
+                                    eval_res.objectives.clone(),
+                                );
                             }
 
                             if let Some(reg) = registry {
@@ -678,7 +697,12 @@ fn evaluate_distributed_dynamic<C: Candidate>(
                             // Insertion cache fallback
                             if score.valid {
                                 if let Some(ref c) = cache {
-                                    c.insert(cand.id(), score.objectives.clone());
+                                    c.insert_scoped(
+                                        domain.name(),
+                                        cand.id(),
+                                        trial.seed,
+                                        score.objectives.clone(),
+                                    );
                                 }
                             }
 

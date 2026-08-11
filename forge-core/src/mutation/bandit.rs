@@ -46,8 +46,8 @@ impl Bandit {
 
         for k in 0..self.arms.len() {
             let mean = self.arms[k] / self.pulls[k] as f64;
-            let bonus = self.exploration * (2.0 * t as f64).ln() / self.pulls[k] as f64;
-            let ucb = mean + bonus.sqrt();
+            let bonus = ((t as f64).ln() / self.pulls[k] as f64).sqrt();
+            let ucb = mean + self.exploration * bonus;
             if ucb > best_ucb {
                 best_ucb = ucb;
                 best_arm = k;

@@ -39,7 +39,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use rand::rngs::StdRng;
+use rand::{rngs::StdRng, SeedableRng};
 
 use crate::candidate::CandidateId;
 use crate::criterion_parser::parse_and_validate_metrics;
@@ -52,20 +52,36 @@ use crate::trial::Trial;
 /// passer le tenseur de `compress` à `reconstruct` par un canal caché (état
 /// global), contournant la mesure de `compressed.len()`. Un compresseur
 /// numérique honnête n'en a aucun besoin.
-const BANNED_GLOBAL_STATE: &[&str] = &[
+const BANNED_CAPABILITIES: &[&str] = &[
     "thread_local",
     "lazy_static",
     "static mut",
     "OnceCell",
     "OnceLock",
     "AtomicPtr",
+    "std::fs",
+    "File",
+    "OpenOptions",
+    "std::net",
+    "TcpStream",
+    "UdpSocket",
+    "UnixStream",
+    "std::process",
+    "Command",
+    "std::env",
+    "std::path",
+    "PathBuf",
+    "include_bytes",
+    "include_str",
+    "unsafe",
+    "extern \"C\"",
 ];
 
-/// Heuristique de rejet des candidats à état global. N'est pas un bac à sable :
-/// le blindage complet est l'isolation de `compress`/`reconstruct` en process
-/// séparés. Mais cela bloque l'exploit réaliste à coût nul.
-fn uses_global_state(source: &str) -> bool {
-    BANNED_GLOBAL_STATE
+/// Défense en profondeur contre les canaux cachés évidents. Ceci n'est PAS
+/// une frontière de sécurité : les candidats non fiables doivent toujours être
+/// exécutés dans un sandbox OS externe au worker Forge.
+fn uses_forbidden_capability(source: &str) -> bool {
+    BANNED_CAPABILITIES
         .iter()
         .any(|needle| source.contains(needle))
 }
@@ -592,7 +608,7 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
     /// un tenseur 4×4×4×4 tiré de `trial.seed`, vérifie l'erreur L2 relative.
     fn verify(&self, cand: &Self::Cand, trial: &Trial) -> crate::error::Result<bool> {
         // Lint : un candidat à état global peut contourner la mesure de params.
-        if uses_global_state(&cand.raw_source) {
+        if uses_forbidden_capability(&cand.raw_source) {
             return Ok(false);
         }
 
@@ -637,7 +653,7 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
 
     /// ÉVALUATION DES OBJECTIFS : [erreur_L2_relative, latence_ns, paramètres_stockés]
     fn measure(&self, cand: &Self::Cand, trial: &Trial) -> crate::error::Result<Vec<f64>> {
-        if uses_global_state(&cand.raw_source) {
+        if uses_forbidden_capability(&cand.raw_source) {
             return Err(ForgeError::Evaluation(
                 "Candidat rejeté : état global interdit (contournement de la mesure de paramètres)"
                     .into(),
@@ -741,9 +757,10 @@ pub fn reconstruct(compressed: &[f64], _shape: &[usize], rebuilt: &mut [f64]) {
         ]
     }
 
-    fn baseline(&self, _trial: &Trial) -> crate::error::Result<Score> {
-        // Baseline : identité (stocke tout → params = 8^4 = 4096, erreur ~0).
-        Ok(Score::valid(vec![0.0, 5000.0, 4096.0]))
+    fn baseline(&self, trial: &Trial) -> crate::error::Result<Score> {
+        // Mesure la vraie baseline identité sur le même trial et la même machine.
+        let base = self.seed(&mut StdRng::seed_from_u64(0));
+        Ok(Score::valid(self.measure(&base, trial)?))
     }
 }
 
@@ -806,9 +823,11 @@ mod tests {
 
     #[test]
     fn test_lint_rejects_global_state() {
-        assert!(uses_global_state("thread_local! { static X: u32 = 0; }"));
-        assert!(uses_global_state("static mut COUNTER: i64 = 0;"));
-        assert!(!uses_global_state(
+        assert!(uses_forbidden_capability(
+            "thread_local! { static X: u32 = 0; }"
+        ));
+        assert!(uses_forbidden_capability("static mut COUNTER: i64 = 0;"));
+        assert!(!uses_forbidden_capability(
             "pub fn compress(f: &[f64], _s: &[usize]) -> Vec<f64> { f.to_vec() }"
         ));
     }

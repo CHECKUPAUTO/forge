@@ -334,7 +334,7 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
     fn extract_ptx_count(env_path: &Path) -> f64 {
         let ptx_path = env_path.join("kernel.ptx");
         if !ptx_path.exists() {
-            return 256.0; // valeur par défaut conservative
+            return 0.0; // métrique absente = invalide
         }
         match fs::read_to_string(&ptx_path) {
             Ok(content) => content
@@ -349,7 +349,7 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
                         && trimmed.contains(';')
                 })
                 .count() as f64,
-            Err(_) => 256.0,
+            Err(_) => 0.0,
         }
     }
 }
@@ -504,6 +504,22 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
             }
         }
 
+        // Génère explicitement le PTX mesuré par le second objectif.
+        let ptx_path = env_path.join("kernel.ptx");
+        let mut ptx_cmd = Command::new("nvcc");
+        ptx_cmd
+            .arg("-O3")
+            .arg("-arch=native")
+            .arg("--ptx")
+            .arg("-o")
+            .arg(&ptx_path)
+            .arg(env_path.join("kernel.cu"))
+            .current_dir(&env_path);
+        if let Err(e) = run_with_timeout(ptx_cmd, self.compile_timeout) {
+            let _ = fs::remove_dir_all(&env_path);
+            return Err(ForgeError::Evaluation(format!("Échec génération PTX: {e}")));
+        }
+
         // Exécution du binaire GPU
         let mut run_cmd = Command::new(&output_bin);
         run_cmd.current_dir(&env_path);
@@ -518,6 +534,12 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
 
         // Comptage des instructions PTX depuis le fichier .ptx généré
         let ptx_count = Self::extract_ptx_count(&env_path);
+        if ptx_count <= 0.0 {
+            let _ = fs::remove_dir_all(&env_path);
+            return Err(ForgeError::Evaluation(
+                "PTX absent ou vide après génération explicite".into(),
+            ));
+        }
 
         let _ = fs::remove_dir_all(&env_path);
 
@@ -530,10 +552,7 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
 
     fn baseline(&self, trial: &Trial) -> Result<Score> {
         let base = self.seed(&mut StdRng::seed_from_u64(0));
-        match self.measure(&base, trial) {
-            Ok(objs) => Ok(Score::valid(objs)),
-            Err(_) => Ok(Score::valid(vec![1_000_000.0, 256.0])),
-        }
+        Ok(Score::valid(self.measure(&base, trial)?))
     }
 }
 

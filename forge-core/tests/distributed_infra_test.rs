@@ -142,10 +142,7 @@ fn test_distributed_evolution_under_stress() {
                         stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
                         stream.set_write_timeout(Some(Duration::from_secs(10))).ok();
 
-                        let payload: EvaluationPayload = match Ok(read_frame(&mut stream)) {
-                            Ok(p) => p,
-                            Err(_) => return,
-                        };
+                        let payload: EvaluationPayload = read_frame(&mut stream);
 
                         let result = evaluate_stub(&payload);
 
@@ -362,7 +359,7 @@ fn test_round_robin_distribution() {
                 Ok((mut stream, _)) => {
                     thread::spawn(move || {
                         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
-                        let payload: EvaluationPayload = Ok(read_frame(&mut stream)).unwrap();
+                        let payload: EvaluationPayload = read_frame(&mut stream);
                         let result = evaluate_stub(&payload);
                         write_frame(&mut stream, &result);
                     });
