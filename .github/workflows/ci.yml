@@ -17,13 +17,15 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
       - name: Check workspace
         run: cargo check --workspace --all-targets
       - name: Clippy workspace
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Unit tests
-        run: cargo test --workspace --lib
-      - name: Compile LLM + bandit paths
-        run: cargo check -p forge-core --all-targets --features bandit
-      - name: Format
-        run: cargo fmt --all -- --check
+      - name: Workspace tests
+        run: cargo test --workspace --all-targets
+      - name: Bandit tests
+        run: cargo test -p forge-core --lib --features bandit
+      - name: Clippy LLM + bandit paths
+        run: cargo clippy -p forge-core --all-targets --features bandit -- -D warnings
