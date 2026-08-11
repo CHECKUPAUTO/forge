@@ -162,11 +162,7 @@ impl MutationBandit {
     }
 
     /// Consume the pending arm for a candidate and deliver its reward exactly once.
-    pub fn deliver_reward_for_candidate(
-        &mut self,
-        candidate_id: CandidateId,
-        reward: f64,
-    ) -> bool {
+    pub fn deliver_reward_for_candidate(&mut self, candidate_id: CandidateId, reward: f64) -> bool {
         let Some(arm) = self.pending_arms.remove(&candidate_id) else {
             return false;
         };
@@ -177,11 +173,7 @@ impl MutationBandit {
     /// Reward for a minimization objective. Invalid children receive -1.0;
     /// otherwise the reward is the relative improvement over the parent,
     /// clamped to [-1, 1]. Missing or invalid parent data yields no reward.
-    pub fn minimization_reward(
-        parent: &Score,
-        child: &Score,
-        objective_idx: usize,
-    ) -> Option<f64> {
+    pub fn minimization_reward(parent: &Score, child: &Score, objective_idx: usize) -> Option<f64> {
         if !parent.valid {
             return None;
         }

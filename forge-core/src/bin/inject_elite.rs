@@ -118,9 +118,8 @@ fn main() {
     for line in manifest.lines() {
         header.push_str(&format!("//! {line}\n"));
     }
-    header.push_str(
-        "//!\n//! NE PAS éditer à la main : régénéré par le binaire `inject_elite`.\n\n",
-    );
+    header
+        .push_str("//!\n//! NE PAS éditer à la main : régénéré par le binaire `inject_elite`.\n\n");
 
     let test_block = match std::env::var("ELITE_TEST_FILE") {
         Ok(test_file) if !test_file.is_empty() => match std::fs::read_to_string(&test_file) {

@@ -118,10 +118,7 @@ fn run_analytics(args: &[String]) -> Result<(), ForgeError> {
     for (rank, ind) in pareto_front.iter().enumerate() {
         let obj0 = ind.score.objectives.first().copied().unwrap_or(f64::NAN);
         let obj1 = ind.score.objectives.get(1).copied().unwrap_or(f64::NAN);
-        println!(
-            "  #{rank:<4} {obj0:<20.6e} {obj1:<20.6e}",
-            rank = rank + 1,
-        );
+        println!("  #{rank:<4} {obj0:<20.6e} {obj1:<20.6e}", rank = rank + 1,);
     }
     println!();
 
@@ -187,9 +184,15 @@ where
         Some(state) => {
             println!("Checkpoint trouvé.");
             println!("  Prochaine génération : {}", state.current_generation);
-            println!("  Population sauvegardée: {}", state.population_sources.len());
+            println!(
+                "  Population sauvegardée: {}",
+                state.population_sources.len()
+            );
             println!("  Archive d'élites      : {}", state.archive.len());
-            println!("  Historique             : {} générations", state.history.len());
+            println!(
+                "  Historique             : {} générations",
+                state.history.len()
+            );
             println!(
                 "  Diagnostics d'échec    : {}",
                 state.failure_diagnostics.len()
