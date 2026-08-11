@@ -1,7 +1,8 @@
 [package]
 name = "forge-domains"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
 description = "Domaines d'évaluation pour forge-core : compression Tensor Train, quantification de kernels, et autres terrains scirust."
 
 [lib]
@@ -12,9 +13,6 @@ forge-core = { path = "../forge-core" }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 
-[workspace]
-
 [[example]]
 name = "train_tt"
 path = "examples/train_tt.rs"
-license = "LicenseRef-CheckupAuto-Dual"
