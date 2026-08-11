@@ -73,26 +73,14 @@ jobs:
           if old not in text:
               raise SystemExit("BENCH_RS pattern not found")
           text = text.replace(old, new, 1)
+          if "bench_timeout: Duration::from_secs(60)," not in text:
+              raise SystemExit("bench timeout pattern not found")
           text = text.replace(
               "bench_timeout: Duration::from_secs(60),",
               "bench_timeout: Duration::from_secs(120),",
               1,
           )
-          old_err = '''            Err(_) => {
-                          self.clean_env(&env_path);
-                          return Err(ForgeError::Evaluation(
-                              "Échec du benchmark Criterion".into(),
-                          ));
-                      }'''.replace("          ", "")
-          new_err = '''            Err(error) => {
-                          self.clean_env(&env_path);
-                          return Err(ForgeError::Evaluation(format!(
-                              "Échec du benchmark Criterion: {error}"
-                          )));
-                      }'''.replace("          ", "")
-          if old_err not in text:
-              raise SystemExit("Criterion error block not found")
-          p.write_text(text.replace(old_err, new_err, 1))
+          p.write_text(text)
       - name: Validate focused path
         run: |
           cargo fmt --all
