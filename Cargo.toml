@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "forge-core",
+    "forge",
+    "forge-bridge",
+    "forge-cli",
+    "forge-domains",
+    "forge-worker",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "LicenseRef-CheckupAuto-Dual"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
