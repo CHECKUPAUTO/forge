@@ -55,7 +55,7 @@ fn test_secure_limits_file_size_limit() {
         dd_cmd(),
         Duration::from_secs(5),
         512 * 1024 * 1024,
-        1 * 1024 * 1024, // 1 MB file size limit
+        1024 * 1024, // 1 MB file size limit
     );
     let _ = std::fs::remove_file("/tmp/forge_limits_test.bin");
     assert!(result.is_err());

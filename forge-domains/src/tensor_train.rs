@@ -240,7 +240,7 @@ mod tests {
             let cand = domain.seed(&mut rng);
             assert_eq!(cand.ranks.len(), 2);
             for &r in &cand.ranks {
-                assert!(r >= 1 && r <= 4);
+                assert!((1..=4).contains(&r));
             }
         }
     }

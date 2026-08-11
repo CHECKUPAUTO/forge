@@ -584,6 +584,7 @@ impl WorkerPool {
 /// Chaque thread Rayon loue un worker, tente l'évaluation, et en cas d'échec
 /// réseau ré-essaie sur un autre worker. Si tous les workers sont morts,
 /// bascule sur une évaluation locale de secours.
+#[allow(clippy::too_many_arguments)]
 fn evaluate_distributed_dynamic<C: Candidate>(
     domain: &impl Domain<Cand = C>,
     population: &[C],
@@ -603,7 +604,7 @@ fn evaluate_distributed_dynamic<C: Candidate>(
         .par_iter()
         .map(|cand| {
             // Hit cache ?
-            if let Some(ref c) = cache {
+            if let Some(c) = cache {
                 if let Some(objs) = c.get_scoped(domain.name(), cand.id(), trial.seed) {
                     return Individual {
                         cand: cand.clone(),
@@ -642,7 +643,7 @@ fn evaluate_distributed_dynamic<C: Candidate>(
 
                         if eval_res.is_valid {
                             // Insertion cache
-                            if let Some(ref c) = cache {
+                            if let Some(c) = cache {
                                 c.insert_scoped(
                                     domain.name(),
                                     cand.id(),
@@ -696,7 +697,7 @@ fn evaluate_distributed_dynamic<C: Candidate>(
 
                             // Insertion cache fallback
                             if score.valid {
-                                if let Some(ref c) = cache {
+                                if let Some(c) = cache {
                                     c.insert_scoped(
                                         domain.name(),
                                         cand.id(),
@@ -763,7 +764,7 @@ pub fn evaluate_parallel_distributed<C: Candidate>(
         .enumerate()
         .map(|(idx, cand)| {
             // Hit cache ?
-            if let Some(ref c) = cache {
+            if let Some(c) = cache {
                 if let Some(objs) = c.get(cand.id()) {
                     return Individual {
                         cand: cand.clone(),
@@ -785,7 +786,7 @@ pub fn evaluate_parallel_distributed<C: Candidate>(
                 Ok(eval_res) => {
                     if eval_res.is_valid {
                         // Insertion cache
-                        if let Some(ref c) = cache {
+                        if let Some(c) = cache {
                             c.insert(cand.id(), eval_res.objectives.clone());
                         }
 
