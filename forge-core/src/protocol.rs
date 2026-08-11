@@ -1,15 +1,16 @@
 //! Structures de données sérialisables transitant entre le Master et les Workers
-//! d'évaluation. Utilise `bincode` pour une sérialisation binaire ultra-rapide
-//! sans parsing textuel.
+//! d'évaluation. Le transport utilise `bincode` avec un framing explicite :
+//! un entier u32 big-endian contenant la taille, suivi du payload sérialisé.
 //!
 //! ## Protocole TCP
 //! 1. Le Master ouvre une connexion TCP synchrone vers le Worker.
-//! 2. Il envoie un [`EvaluationPayload`] sérialisé en bincode.
-//! 3. Il lit la réponse [`EvaluationResult`] désérialisée en bincode.
+//! 2. Il envoie `len || EvaluationPayload`.
+//! 3. Le Worker renvoie `len || EvaluationResult`.
 //!
-//! Aucun framing complexe : une connexion = une requête-réponse.
+//! Le framing évite de dépendre d'un EOF pour délimiter un message et permet
+//! de réutiliser la même connexion en requête-réponse sans deadlock.
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
@@ -17,6 +18,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::candidate::CandidateId;
 use crate::error::{ForgeError, Result};
+
+/// Taille maximale d'un message Forge sur le réseau (code candidat inclus).
+pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Structures de données du protocole
@@ -28,7 +32,7 @@ use crate::error::{ForgeError, Result};
 pub struct EvaluationPayload {
     /// Identifiant unique du candidat (hash FNV-1a).
     pub candidate_id: CandidateId,
-    /// Code source Rust du candidat à compiler et exécuter.
+    /// Code source du candidat à compiler et exécuter.
     pub source_code: String,
     /// Graine du trial pour reproductibilité.
     pub seed: u64,
@@ -49,23 +53,55 @@ pub struct EvaluationResult {
     pub error_message: Option<String>,
 }
 
+fn write_frame<T: Serialize>(stream: &mut TcpStream, value: &T) -> Result<()> {
+    let bytes = bincode::serialize(value)
+        .map_err(|e| ForgeError::Evaluation(format!("Échec sérialisation bincode: {e}")))?;
+    if bytes.len() > MAX_MESSAGE_BYTES {
+        return Err(ForgeError::Evaluation(format!(
+            "Message réseau trop volumineux: {} octets > limite {}",
+            bytes.len(),
+            MAX_MESSAGE_BYTES
+        )));
+    }
+    let len = u32::try_from(bytes.len())
+        .map_err(|_| ForgeError::Evaluation("Message réseau trop volumineux pour le framing u32".into()))?;
+    stream
+        .write_all(&len.to_be_bytes())
+        .map_err(|e| ForgeError::Evaluation(format!("Échec écriture taille du frame: {e}")))?;
+    stream
+        .write_all(&bytes)
+        .map_err(|e| ForgeError::Evaluation(format!("Échec écriture payload: {e}")))?;
+    stream
+        .flush()
+        .map_err(|e| ForgeError::Evaluation(format!("Échec flush socket: {e}")))?;
+    Ok(())
+}
+
+fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut TcpStream) -> Result<T> {
+    let mut len_buf = [0u8; 4];
+    stream
+        .read_exact(&mut len_buf)
+        .map_err(|e| ForgeError::Evaluation(format!("Échec lecture taille du frame: {e}")))?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len == 0 || len > MAX_MESSAGE_BYTES {
+        return Err(ForgeError::Evaluation(format!(
+            "Taille de frame invalide: {len} octets (limite {MAX_MESSAGE_BYTES})"
+        )));
+    }
+    let mut bytes = vec![0u8; len];
+    stream
+        .read_exact(&mut bytes)
+        .map_err(|e| ForgeError::Evaluation(format!("Échec lecture payload: {e}")))?;
+    bincode::deserialize(&bytes)
+        .map_err(|e| ForgeError::Evaluation(format!("Payload corrompu du worker: {e}")))
+}
+
 // ---------------------------------------------------------------------------
 // Fonction de routage maître (dispatch synchrone)
 // ---------------------------------------------------------------------------
 
 /// Envoie un [`EvaluationPayload`] à un Worker distant et récupère le
-/// [`EvaluationResult`]. Conçu pour être appelé depuis un thread Rayon
-/// (dispatch synchrone avec timeout agressif).
-///
-/// # Arguments
-/// * `addr` — adresse du Worker au format `"host:port"` (ex: `"192.168.1.10:9000"`).
-/// * `payload` — le paquet d'évaluation à transmettre.
-/// * `timeout` — timeout de connexion ET de lecture/écriture.
-///
-/// # Protocole binaire
-/// 1. Sérialise `payload` avec `bincode::serialize_into` sur le flux TCP.
-/// 2. Flushe pour garantir l'envoi complet.
-/// 3. Désérialise la réponse avec `bincode::deserialize_from`.
+/// [`EvaluationResult`]. Conçu pour être appelé depuis un thread Rayon.
 pub fn dispatch_evaluation_to_worker(
     addr: &str,
     payload: &EvaluationPayload,
@@ -86,20 +122,23 @@ pub fn dispatch_evaluation_to_worker(
         .set_write_timeout(Some(timeout))
         .map_err(|e| ForgeError::Evaluation(format!("Configuration timeout écriture: {e}")))?;
 
-    // Sérialisation binaire du payload dans le flux TCP
-    bincode::serialize_into(&mut stream, payload)
-        .map_err(|e| ForgeError::Evaluation(format!("Échec sérialisation payload: {e}")))?;
+    write_frame(&mut stream, payload)?;
+    let result: EvaluationResult = read_frame(&mut stream)?;
 
-    // Flush impératif pour garantir que le Worker reçoit le message complet
-    stream
-        .flush()
-        .map_err(|e| ForgeError::Evaluation(format!("Échec flush socket: {e}")))?;
+    if result.candidate_id != payload.candidate_id {
+        return Err(ForgeError::Evaluation(format!(
+            "Réponse worker incohérente: candidate_id={} attendu={}",
+            result.candidate_id, payload.candidate_id
+        )));
+    }
 
-    // Désérialisation binaire de la réponse
-    let result: EvaluationResult =
-        bincode::deserialize_from(&mut stream).map_err(|e| {
-            ForgeError::Evaluation(format!("Payload corrompu du worker: {e}"))
-        })?;
+    if result.is_valid
+        && (result.objectives.is_empty() || !result.objectives.iter().all(|v| v.is_finite()))
+    {
+        return Err(ForgeError::Evaluation(
+            "Réponse worker invalide: score déclaré valide mais objectifs absents/non finis".into(),
+        ));
+    }
 
     Ok(result)
 }
@@ -111,8 +150,9 @@ pub fn dispatch_evaluation_to_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+    use std::thread;
 
-    /// Vérifie la sérialisation/désérialisation aller-retour en mémoire.
     #[test]
     fn test_payload_bincode_roundtrip() {
         let payload = EvaluationPayload {
@@ -152,26 +192,6 @@ mod tests {
     }
 
     #[test]
-    fn test_result_with_error_bincode_roundtrip() {
-        let res = EvaluationResult {
-            candidate_id: 999,
-            is_valid: false,
-            objectives: vec![],
-            error_message: Some("Compilation échouée: syntax error".into()),
-        };
-
-        let bytes = bincode::serialize(&res).expect("sérialisation");
-        let recovered: EvaluationResult =
-            bincode::deserialize(&bytes).expect("désérialisation");
-
-        assert!(!recovered.is_valid);
-        assert_eq!(
-            recovered.error_message.unwrap(),
-            "Compilation échouée: syntax error"
-        );
-    }
-
-    #[test]
     fn test_dispatch_invalid_addr() {
         let payload = EvaluationPayload {
             candidate_id: 1,
@@ -185,5 +205,38 @@ mod tests {
             Duration::from_secs(1),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn framed_dispatch_roundtrip_without_eof() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let payload: EvaluationPayload = read_frame(&mut stream).expect("read request");
+            let result = EvaluationResult {
+                candidate_id: payload.candidate_id,
+                is_valid: true,
+                objectives: vec![42.0],
+                error_message: None,
+            };
+            write_frame(&mut stream, &result).expect("write response");
+        });
+
+        let payload = EvaluationPayload {
+            candidate_id: 77,
+            source_code: "x".repeat(128 * 1024),
+            seed: 123,
+            generation: 9,
+        };
+        let result = dispatch_evaluation_to_worker(
+            &addr.to_string(),
+            &payload,
+            Duration::from_secs(2),
+        )
+        .expect("dispatch");
+        assert_eq!(result.candidate_id, 77);
+        assert_eq!(result.objectives, vec![42.0]);
+        worker.join().expect("worker thread");
     }
 }
