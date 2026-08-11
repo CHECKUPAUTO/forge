@@ -17,8 +17,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all -- --check
       - name: Check workspace
         run: cargo check --workspace --all-targets
       - name: Clippy workspace
@@ -27,3 +25,5 @@ jobs:
         run: cargo test --workspace --lib
       - name: Compile LLM + bandit paths
         run: cargo check -p forge-core --all-targets --features bandit
+      - name: Format
+        run: cargo fmt --all -- --check
