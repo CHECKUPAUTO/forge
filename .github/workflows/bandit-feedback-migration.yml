@@ -20,13 +20,24 @@ jobs:
           components: rustfmt, clippy
       - name: Apply migration
         run: python3 tools/bandit_feedback_migrate.py
+      - name: Remove stale CUDA duplicate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("forge-core/src/domains/cuda_kernel.rs")
+          text = p.read_text()
+          old = "        let objectives = vec![OBJ.to_string(), OBJ_WEAK.to_string()];\n\n"
+          if old not in text:
+              raise SystemExit("stale CUDA objectives declaration not found")
+          p.write_text(text.replace(old, "", 1))
+          PY
       - name: Validate
         run: |
           cargo fmt --all
           cargo check --workspace --all-targets
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test -p forge-core --lib --features bandit
-          cargo check -p forge-core --all-targets --features bandit
+          cargo clippy -p forge-core --all-targets --features bandit -- -D warnings
       - name: Commit
         run: |
           git config user.name "github-actions[bot]"
