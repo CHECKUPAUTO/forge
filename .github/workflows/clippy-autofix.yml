@@ -22,6 +22,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+
           p = Path("forge-core/src/evolve.rs")
           text = p.read_text()
           text = text.replace("if let Some(ref c) = cache {", "if let Some(c) = cache {")
@@ -45,6 +46,13 @@ jobs:
               "assert!((1..=4).contains(&r));",
           )
           p.write_text(text)
+
+          p = Path("forge-core/tests/secure_limits_test.rs")
+          text = p.read_text().replace(
+              "1 * 1024 * 1024, // 1 MB file size limit",
+              "1024 * 1024, // 1 MB file size limit",
+          )
+          p.write_text(text)
       - name: Validate
         run: |
           cargo fmt --all
@@ -54,6 +62,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add forge-core/src/evolve.rs forge/src/binpack.rs forge-domains/src/tensor_train.rs
+          git add forge-core/src/evolve.rs forge/src/binpack.rs forge-domains/src/tensor_train.rs forge-core/tests/secure_limits_test.rs
           git commit -m "fix(clippy): clean workspace warnings"
           git push origin HEAD:chore/forge-hardening-v1
