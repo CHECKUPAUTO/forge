@@ -76,12 +76,7 @@ impl EvaluationCache {
         )
     }
 
-    pub fn scoped_key(
-        &self,
-        domain: &str,
-        candidate_id: CandidateId,
-        trial_seed: u64,
-    ) -> String {
+    pub fn scoped_key(&self, domain: &str, candidate_id: CandidateId, trial_seed: u64) -> String {
         format!(
             "v{CACHE_SCHEMA_VERSION}|{}|{domain}|{trial_seed:016x}|{candidate_id:016x}",
             self.environment_fingerprint

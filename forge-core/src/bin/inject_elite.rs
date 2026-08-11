@@ -32,18 +32,22 @@ fn main() {
 
     let date = Command::new("date")
         .args(["-u", "+%Y-%m-%dT%H:%M:%SZ"])
-        .output().ok()
+        .output()
+        .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| "?".to_string());
 
     let mut header = String::new();
-    header.push_str("//! Algorithme decouvert automatiquement par forge (FunSearch/AlphaEvolve-style).\n");
+    header.push_str(
+        "//! Algorithme decouvert automatiquement par forge (FunSearch/AlphaEvolve-style).\n",
+    );
     header.push_str(&format!("//! Injecte le {date}.\n//!\n"));
     for line in manifest.lines() {
         header.push_str(&format!("//! {line}\n"));
     }
-    header.push_str("//!\n//! NE PAS editer a la main : regenere par le binaire `inject_elite`.\n\n");
+    header
+        .push_str("//!\n//! NE PAS editer a la main : regenere par le binaire `inject_elite`.\n\n");
 
     // Test optionnel fourni par le domaine ; sinon la correction est attestee par le holdout de forge.
     let test_block = match std::env::var("ELITE_TEST_FILE") {
@@ -68,28 +72,45 @@ fn main() {
     let lib_path = Path::new(&target).join("src").join("lib.rs");
     let lib = match std::fs::read_to_string(&lib_path) {
         Ok(s) => s,
-        Err(e) => { eprintln!("lecture {} echouee : {e}", lib_path.display()); std::process::exit(1); }
+        Err(e) => {
+            eprintln!("lecture {} echouee : {e}", lib_path.display());
+            std::process::exit(1);
+        }
     };
     let decl = format!("pub mod {module};");
     if lib.contains(&decl) {
         println!("lib.rs : `{decl}` deja present");
     } else {
         let mut lines: Vec<String> = lib.lines().map(|l| l.to_string()).collect();
-        match lines.iter().rposition(|l| l.trim_start().starts_with("pub mod ")) {
+        match lines
+            .iter()
+            .rposition(|l| l.trim_start().starts_with("pub mod "))
+        {
             Some(i) => lines.insert(i + 1, decl.clone()),
             None => lines.insert(0, decl.clone()),
         }
         let new_lib = lines.join("\n") + "\n";
         if let Err(e) = std::fs::write(&lib_path, &new_lib) {
-            eprintln!("maj lib.rs echouee : {e}"); std::process::exit(1);
+            eprintln!("maj lib.rs echouee : {e}");
+            std::process::exit(1);
         }
         println!("lib.rs : `{decl}` ajoute");
     }
 
     println!("--- cargo test --release dans {target} (porte CI) ---");
-    match Command::new("cargo").args(["test", "--release"]).current_dir(&target).status() {
+    match Command::new("cargo")
+        .args(["test", "--release"])
+        .current_dir(&target)
+        .status()
+    {
         Ok(s) if s.success() => println!(">>> INJECTION OK : {module}.rs integre et teste vert"),
-        Ok(s) => { eprintln!(">>> ECHEC : cargo test code {:?} (module ecrit ; `git checkout .` dans la cible pour annuler)", s.code()); std::process::exit(1); }
-        Err(e) => { eprintln!(">>> impossible de lancer cargo : {e}"); std::process::exit(1); }
+        Ok(s) => {
+            eprintln!(">>> ECHEC : cargo test code {:?} (module ecrit ; `git checkout .` dans la cible pour annuler)", s.code());
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!(">>> impossible de lancer cargo : {e}");
+            std::process::exit(1);
+        }
     }
 }

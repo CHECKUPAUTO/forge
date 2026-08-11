@@ -63,8 +63,9 @@ fn write_frame<T: Serialize>(stream: &mut TcpStream, value: &T) -> Result<()> {
             MAX_MESSAGE_BYTES
         )));
     }
-    let len = u32::try_from(bytes.len())
-        .map_err(|_| ForgeError::Evaluation("Message réseau trop volumineux pour le framing u32".into()))?;
+    let len = u32::try_from(bytes.len()).map_err(|_| {
+        ForgeError::Evaluation("Message réseau trop volumineux pour le framing u32".into())
+    })?;
     stream
         .write_all(&len.to_be_bytes())
         .map_err(|e| ForgeError::Evaluation(format!("Échec écriture taille du frame: {e}")))?;
@@ -111,9 +112,8 @@ pub fn dispatch_evaluation_to_worker(
         .parse()
         .map_err(|e| ForgeError::Evaluation(format!("Adresse worker invalide '{addr}': {e}")))?;
 
-    let mut stream = TcpStream::connect_timeout(&socket_addr, timeout).map_err(|e| {
-        ForgeError::Evaluation(format!("Connexion worker perdue ({addr}): {e}"))
-    })?;
+    let mut stream = TcpStream::connect_timeout(&socket_addr, timeout)
+        .map_err(|e| ForgeError::Evaluation(format!("Connexion worker perdue ({addr}): {e}")))?;
 
     stream
         .set_read_timeout(Some(timeout))
@@ -163,8 +163,7 @@ mod tests {
         };
 
         let bytes = bincode::serialize(&payload).expect("sérialisation");
-        let recovered: EvaluationPayload =
-            bincode::deserialize(&bytes).expect("désérialisation");
+        let recovered: EvaluationPayload = bincode::deserialize(&bytes).expect("désérialisation");
 
         assert_eq!(recovered.candidate_id, payload.candidate_id);
         assert_eq!(recovered.source_code, payload.source_code);
@@ -182,8 +181,7 @@ mod tests {
         };
 
         let bytes = bincode::serialize(&res).expect("sérialisation");
-        let recovered: EvaluationResult =
-            bincode::deserialize(&bytes).expect("désérialisation");
+        let recovered: EvaluationResult = bincode::deserialize(&bytes).expect("désérialisation");
 
         assert_eq!(recovered.candidate_id, res.candidate_id);
         assert!(recovered.is_valid);
@@ -199,11 +197,8 @@ mod tests {
             seed: 0,
             generation: 0,
         };
-        let result = dispatch_evaluation_to_worker(
-            "invalid-addr",
-            &payload,
-            Duration::from_secs(1),
-        );
+        let result =
+            dispatch_evaluation_to_worker("invalid-addr", &payload, Duration::from_secs(1));
         assert!(result.is_err());
     }
 
@@ -229,12 +224,9 @@ mod tests {
             seed: 123,
             generation: 9,
         };
-        let result = dispatch_evaluation_to_worker(
-            &addr.to_string(),
-            &payload,
-            Duration::from_secs(2),
-        )
-        .expect("dispatch");
+        let result =
+            dispatch_evaluation_to_worker(&addr.to_string(), &payload, Duration::from_secs(2))
+                .expect("dispatch");
         assert_eq!(result.candidate_id, 77);
         assert_eq!(result.objectives, vec![42.0]);
         worker.join().expect("worker thread");

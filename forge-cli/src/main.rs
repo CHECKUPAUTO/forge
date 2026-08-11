@@ -72,9 +72,7 @@ fn run_analytics(args: &[String]) -> Result<(), ForgeError> {
     let registry = AlgorithmRegistry::open(&db_path)?;
 
     // Collecte de tous les enregistrements
-    let records: Vec<GenerationRecord> = registry
-        .iter()
-        .collect::<Result<Vec<_>, ForgeError>>()?;
+    let records: Vec<GenerationRecord> = registry.iter().collect::<Result<Vec<_>, ForgeError>>()?;
 
     if records.is_empty() {
         println!("⚠️  Aucun enregistrement trouvé dans la base.");
@@ -124,7 +122,10 @@ fn run_analytics(args: &[String]) -> Result<(), ForgeError> {
     let pareto_front = extract_pareto_front(&individuals);
 
     println!("── Front de Pareto (candidats non-dominés) ──");
-    println!("  {count} individus sur le front", count = pareto_front.len());
+    println!(
+        "  {count} individus sur le front",
+        count = pareto_front.len()
+    );
     println!();
 
     // Affichage ASCII
@@ -214,18 +215,9 @@ fn run_resume(args: &[String]) -> Result<(), ForgeError> {
             println!("✅ Checkpoint trouvé !");
             println!();
             println!("── État du checkpoint ──");
-            println!(
-                "  Génération        : {}",
-                state.current_generation
-            );
-            println!(
-                "  Archive d'élites  : {} individus",
-                state.archive.len()
-            );
-            println!(
-                "  Historique        : {} générations",
-                state.history.len()
-            );
+            println!("  Génération        : {}", state.current_generation);
+            println!("  Archive d'élites  : {} individus", state.archive.len());
+            println!("  Historique        : {} générations", state.history.len());
             println!(
                 "  Échecs cumulés    : {} diagnostics",
                 state.failure_diagnostics.len()
@@ -234,9 +226,7 @@ fn run_resume(args: &[String]) -> Result<(), ForgeError> {
 
             // Affichage du meilleur objectif connu
             if let Some(best_obj) = state.history.last() {
-                println!(
-                    "  Meilleur obj. principal : {best_obj:.6e}",
-                );
+                println!("  Meilleur obj. principal : {best_obj:.6e}",);
             }
 
             println!();
@@ -249,9 +239,7 @@ fn run_resume(args: &[String]) -> Result<(), ForgeError> {
             println!();
             println!("   Vérifie que :");
             println!("   1. Le chemin de la base est correct");
-            println!(
-                "   2. Une campagne a bien été exécutée avec with_registry()"
-            );
+            println!("   2. Une campagne a bien été exécutée avec with_registry()");
             println!("   3. Le moteur a sauvegardé au moins une génération");
         }
     }

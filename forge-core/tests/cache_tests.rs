@@ -49,10 +49,7 @@ fn scoped_cache_persistence() {
     }
 
     let cache2 = EvaluationCache::new(path).with_environment_fingerprint("persist-env");
-    assert_eq!(
-        cache2.get_scoped("low_rank", id, 77),
-        Some(objectives)
-    );
+    assert_eq!(cache2.get_scoped("low_rank", id, 77), Some(objectives));
 
     let cache3 = EvaluationCache::new(path).with_environment_fingerprint("other-env");
     assert!(cache3.get_scoped("low_rank", id, 77).is_none());

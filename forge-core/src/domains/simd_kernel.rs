@@ -234,8 +234,8 @@ A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la me
             .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 1. Cargo.toml
-        let mut toml =
-            File::create(env_path.join("Cargo.toml")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut toml = File::create(env_path.join("Cargo.toml"))
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
         writeln!(
             toml,
             "[package]\nname = \"gemm_bench\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
@@ -246,8 +246,8 @@ A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la me
         .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
         // 2. lib.rs — code candidat
-        let mut lib =
-            File::create(src_path.join("lib.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut lib = File::create(src_path.join("lib.rs"))
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
         writeln!(lib, "#![allow(dead_code)]\n{}", raw_code)
             .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
@@ -255,8 +255,8 @@ A TOI de reorganiser le calcul pour que la boucle la plus INTERNE parcoure la me
         let main_src = VERIFY_MAIN
             .replace("__SIZE__", &size.to_string())
             .replace("__SEED__", &seed.to_string());
-        let mut main =
-            File::create(src_path.join("main.rs")).map_err(|e| ForgeError::Evaluation(e.to_string()))?;
+        let mut main = File::create(src_path.join("main.rs"))
+            .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
         main.write_all(main_src.as_bytes())
             .map_err(|e| ForgeError::Evaluation(e.to_string()))?;
 
@@ -330,13 +330,20 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
                     let (new_src, arm) = bandit.mutate_and_record_arm(&parent_src, None);
 
                     if std::env::var("FORGE_VERBOSE").is_ok() {
-                        eprintln!("[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
-                            arm, new_src.len(), bandit.best_arm());
+                        eprintln!(
+                            "[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
+                            arm,
+                            new_src.len(),
+                            bandit.best_arm()
+                        );
                     }
                     std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
 
                     let id = crate::fnv1a(&new_src);
-                    return Ok(SimdKernelCode { source: new_src, id });
+                    return Ok(SimdKernelCode {
+                        source: new_src,
+                        id,
+                    });
                 }
             }
 
@@ -357,7 +364,10 @@ pub fn compute_kernel(c: &mut [f64], a: &[f64], b: &[f64], n: usize) {
                     eprintln!("[forge:mutate] LLM -> {} octets de source", new_src.len());
                 }
                 let id = crate::fnv1a(&new_src);
-                return Ok(SimdKernelCode { source: new_src, id });
+                return Ok(SimdKernelCode {
+                    source: new_src,
+                    id,
+                });
             }
         }
         let _ = parents;

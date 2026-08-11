@@ -120,7 +120,8 @@ pub fn parse_and_validate_metrics(
     };
 
     // 2. Parser le JSON
-    let metrics = parse_estimates_file(&path).map_err(|e| ForgeError::Evaluation(format!("Erreur parsing estimates.json: {e}")))?;
+    let metrics = parse_estimates_file(&path)
+        .map_err(|e| ForgeError::Evaluation(format!("Erreur parsing estimates.json: {e}")))?;
 
     // 3. Extraire ou calculer l'erreur standard
     let mean_ns = metrics.mean_latency_ns;
@@ -200,7 +201,10 @@ pub fn extract_criterion_latency(target_dir: &Path, bench_name: &str) -> std::io
 fn parse_estimates_file(path: &Path) -> std::io::Result<CriterionMetrics> {
     let content = fs::read_to_string(path)?;
     let estimates: CriterionEstimates = serde_json::from_str(&content).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("JSON invalide: {e}"))
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("JSON invalide: {e}"),
+        )
     })?;
 
     // Récupérer l'erreur standard :
@@ -307,7 +311,11 @@ mod tests {
     fn test_validate_stable_measurement() {
         use std::io::Write;
         let dir = std::env::temp_dir().join("test_criterion_validate_stable");
-        let criterion_dir = dir.join("target").join("criterion").join("my_bench").join("new");
+        let criterion_dir = dir
+            .join("target")
+            .join("criterion")
+            .join("my_bench")
+            .join("new");
         let _ = std::fs::create_dir_all(&criterion_dir);
 
         // Mesure stable : std_error/mean = 5/500 = 0.01 (1%)
@@ -330,9 +338,12 @@ mod tests {
     #[test]
     fn test_validate_unstable_measurement_rejected() {
         use std::io::Write;
-        let dir =
-            std::env::temp_dir().join("test_criterion_validate_unstable");
-        let criterion_dir = dir.join("target").join("criterion").join("noisy_bench").join("new");
+        let dir = std::env::temp_dir().join("test_criterion_validate_unstable");
+        let criterion_dir = dir
+            .join("target")
+            .join("criterion")
+            .join("noisy_bench")
+            .join("new");
         let _ = std::fs::create_dir_all(&criterion_dir);
 
         // Mesure instable : std_error/mean = 60/500 = 0.12 (12%) > 5% seuil
@@ -366,7 +377,11 @@ mod tests {
     fn test_validate_zero_mean_rejected() {
         use std::io::Write;
         let dir = std::env::temp_dir().join("test_criterion_zero_mean");
-        let criterion_dir = dir.join("target").join("criterion").join("bad_bench").join("new");
+        let criterion_dir = dir
+            .join("target")
+            .join("criterion")
+            .join("bad_bench")
+            .join("new");
         let _ = std::fs::create_dir_all(&criterion_dir);
 
         let json = r#"{
@@ -387,9 +402,12 @@ mod tests {
     #[test]
     fn test_validate_with_confidence_interval_fallback() {
         use std::io::Write;
-        let dir =
-            std::env::temp_dir().join("test_criterion_ci_fallback");
-        let criterion_dir = dir.join("target").join("criterion").join("ci_bench").join("new");
+        let dir = std::env::temp_dir().join("test_criterion_ci_fallback");
+        let criterion_dir = dir
+            .join("target")
+            .join("criterion")
+            .join("ci_bench")
+            .join("new");
         let _ = std::fs::create_dir_all(&criterion_dir);
 
         // Pas de standard_error, mais confidence_interval disponible

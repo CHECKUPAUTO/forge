@@ -44,9 +44,9 @@ impl AlgorithmRegistry {
         self.db.insert(key, payload).map_err(|e| {
             ForgeError::Evaluation(format!("Échec de l'insertion transactionnelle: {e}"))
         })?;
-        self.db.flush().map_err(|e| {
-            ForgeError::Evaluation(format!("Échec du flush matériel: {e}"))
-        })?;
+        self.db
+            .flush()
+            .map_err(|e| ForgeError::Evaluation(format!("Échec du flush matériel: {e}")))?;
         Ok(())
     }
 
@@ -60,7 +60,9 @@ impl AlgorithmRegistry {
                 Ok(Some(record))
             }
             Ok(None) => Ok(None),
-            Err(e) => Err(ForgeError::Evaluation(format!("Erreur d'accès à Sled DB: {e}"))),
+            Err(e) => Err(ForgeError::Evaluation(format!(
+                "Erreur d'accès à Sled DB: {e}"
+            ))),
         }
     }
 

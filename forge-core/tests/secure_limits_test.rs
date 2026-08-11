@@ -1,6 +1,6 @@
+use forge_core::isolation::run_with_secure_limits;
 use std::process::Command;
 use std::time::Duration;
-use forge_core::isolation::run_with_secure_limits;
 
 fn echo_cmd(msg: &str) -> Command {
     let mut cmd = Command::new("echo");
@@ -17,9 +17,9 @@ fn sleep_cmd(secs: &str) -> Command {
 fn dd_cmd() -> Command {
     let mut cmd = Command::new("dd");
     cmd.arg("if=/dev/zero")
-       .arg("of=/tmp/forge_limits_test.bin")
-       .arg("bs=1M")
-       .arg("count=2");
+        .arg("of=/tmp/forge_limits_test.bin")
+        .arg("bs=1M")
+        .arg("count=2");
     cmd
 }
 

@@ -31,19 +31,19 @@
 //! La feature `llm` ajoute un client Ollama ([`llm::ollama_generate`]) pour le
 //! generateur de candidats des domaines "code".
 
-mod candidate;
-mod domain;
-mod error;
-mod evolve;
 pub mod cache;
+mod candidate;
 pub mod criterion_parser;
 pub mod diagnostics;
+mod domain;
 pub mod domains;
+mod error;
+mod evolve;
 pub mod isolation;
 pub mod micro_mutator;
+pub mod mutation;
 pub mod protocol;
 pub mod registry;
-pub mod mutation;
 mod trial;
 
 pub mod report_util;
@@ -55,6 +55,9 @@ pub use candidate::{fnv1a, Candidate, CandidateId};
 pub use diagnostics::{FailureDiagnostics, FailureStage};
 pub use domain::{Domain, Score};
 pub use error::{ForgeError, Result};
-pub use evolve::{evaluate_parallel_distributed, evaluate_with_feedback, sort_by_pareto_domination, Config, DeserializeFromSource, Engine, EngineState, Individual, Report};
+pub use evolve::{
+    evaluate_parallel_distributed, evaluate_with_feedback, sort_by_pareto_domination, Config,
+    DeserializeFromSource, Engine, EngineState, Individual, Report,
+};
 pub use isolation::run_with_timeout;
 pub use trial::Trial;

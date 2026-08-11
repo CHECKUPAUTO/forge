@@ -30,12 +30,18 @@ pub struct Score {
 impl Score {
     /// Score d'un candidat qui n'a pas passe la porte de correction.
     pub fn invalid() -> Self {
-        Score { objectives: Vec::new(), valid: false }
+        Score {
+            objectives: Vec::new(),
+            valid: false,
+        }
     }
 
     /// Construit un score valide a partir d'objectifs finis.
     pub fn valid(objectives: Vec<f64>) -> Self {
-        Score { objectives, valid: true }
+        Score {
+            objectives,
+            valid: true,
+        }
     }
 
     /// Domination au sens de Pareto (minimisation). Un score invalide est

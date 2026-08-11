@@ -10,13 +10,12 @@
 //! The exploration bonus shrinks as an arm is sampled more, shifting the bandit
 //! toward exploitation of the best-performing arm.
 
-
 /// Upper Confidence Bound bandit for selecting mutation strategies.
 #[derive(Clone)]
 pub struct Bandit {
-    arms: Vec<f64>,           // total reward per arm
-    pulls: Vec<u64>,          // number of times each arm has been pulled
-    exploration: f64,         // exploration parameter (default = sqrt(2))
+    arms: Vec<f64>,   // total reward per arm
+    pulls: Vec<u64>,  // number of times each arm has been pulled
+    exploration: f64, // exploration parameter (default = sqrt(2))
 }
 
 impl Bandit {
@@ -75,7 +74,9 @@ impl Bandit {
         let mut best = 0;
         let mut best_mean = f64::NEG_INFINITY;
         for k in 0..self.pulls.len() {
-            if self.pulls[k] == 0 { continue; }
+            if self.pulls[k] == 0 {
+                continue;
+            }
             let mean = self.arms[k] / self.pulls[k] as f64;
             if mean > best_mean {
                 best_mean = mean;
@@ -100,8 +101,12 @@ impl Bandit {
 
     /// Reset the bandit state (for testing or re-initialization).
     pub fn reset(&mut self) {
-        for arm in &mut self.arms { *arm = 0.0; }
-        for pull in &mut self.pulls { *pull = 0; }
+        for arm in &mut self.arms {
+            *arm = 0.0;
+        }
+        for pull in &mut self.pulls {
+            *pull = 0;
+        }
     }
 }
 
@@ -191,9 +196,9 @@ impl MutationBandit {
 
 #[cfg(test)]
 mod tests {
-    use rand::SeedableRng;
-    use rand::Rng;
     use super::*;
+    use rand::Rng;
+    use rand::SeedableRng;
 
     #[test]
     fn test_ucb1_converges_to_best_arm() {
@@ -206,13 +211,16 @@ mod tests {
             let arm = bandit.pull();
             let reward = match arm {
                 1 => rng.gen::<f64>() * 0.1 + 0.8, // ~0.85 avg
-                _ => rng.gen::<f64>() * 0.1 + 0.1,  // ~0.15 avg
+                _ => rng.gen::<f64>() * 0.1 + 0.1, // ~0.15 avg
             };
             bandit.reward(arm, reward);
         }
 
         let best = bandit.best_arm();
-        assert_eq!(best, 1, "UCB1 should converge to arm 1 (highest mean), got {best}");
+        assert_eq!(
+            best, 1,
+            "UCB1 should converge to arm 1 (highest mean), got {best}"
+        );
     }
 
     #[test]
@@ -253,11 +261,13 @@ mod tests {
             let mut count = 0u64;
             for _ in 0..n_rounds {
                 let arm = bandit.pull();
-                if arm == 0 { count += 1; }
+                if arm == 0 {
+                    count += 1;
+                }
                 // Arm 0 gives near-perfect rewards; others give near-zero.
                 let reward = match arm {
-                    0 => rng.gen::<f64>() * 0.05 + 0.9,   // ~0.925 avg
-                    _ => rng.gen::<f64>() * 0.05,            // ~0.025 avg
+                    0 => rng.gen::<f64>() * 0.05 + 0.9, // ~0.925 avg
+                    _ => rng.gen::<f64>() * 0.05,       // ~0.025 avg
                 };
                 bandit.reward(arm, reward);
             }
@@ -280,8 +290,8 @@ mod tests {
             let arm = bandit.pull();
             bandit.reward(arm, if arm == 0 { 1.0 } else { 0.0 });
 
-        // Before reset, arm 0 should dominate.
-        assert_eq!(bandit.best_arm(), 0);
+            // Before reset, arm 0 should dominate.
+            assert_eq!(bandit.best_arm(), 0);
         }
 
         bandit.reset();

@@ -13,9 +13,7 @@
 //! 2. Coût de stockage normalisé : ratio stockage_TT / stockage_dense.
 //!    Plus c'est bas, plus la compression est forte.
 
-use forge_core::{
-    fnv1a, Candidate, CandidateId, Domain, Result, Score, Trial,
-};
+use forge_core::{fnv1a, Candidate, CandidateId, Domain, Result, Score, Trial};
 use rand::rngs::StdRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -185,7 +183,10 @@ impl Domain for TensorTrainDomain {
     }
 
     fn objective_names(&self) -> Vec<String> {
-        vec!["erreur_reconstruction".into(), "ratio_stockage_TT_dense".into()]
+        vec![
+            "erreur_reconstruction".into(),
+            "ratio_stockage_TT_dense".into(),
+        ]
     }
 
     fn baseline(&self, _trial: &Trial) -> Result<Score> {
@@ -248,18 +249,28 @@ mod tests {
     fn test_domain_verify_rejects_wrong_size() {
         let config = TtConfig::new(vec![4, 5, 6], 1, 4);
         let domain = TensorTrainDomain::new(config);
-        let trial = Trial { generation: 0, seed: 42 };
+        let trial = Trial {
+            generation: 0,
+            seed: 42,
+        };
         // Wrong number of ranks
         assert!(!domain.verify(&TtCandidate::new(vec![1]), &trial).unwrap());
-        assert!(!domain.verify(&TtCandidate::new(vec![1, 2, 3]), &trial).unwrap());
+        assert!(!domain
+            .verify(&TtCandidate::new(vec![1, 2, 3]), &trial)
+            .unwrap());
     }
 
     #[test]
     fn test_domain_measure_two_objectives() {
         let config = TtConfig::new(vec![16, 32, 8], 1, 8);
         let domain = TensorTrainDomain::new(config);
-        let trial = Trial { generation: 0, seed: 42 };
-        let objectives = domain.measure(&TtCandidate::new(vec![4, 4]), &trial).unwrap();
+        let trial = Trial {
+            generation: 0,
+            seed: 42,
+        };
+        let objectives = domain
+            .measure(&TtCandidate::new(vec![4, 4]), &trial)
+            .unwrap();
         assert_eq!(objectives.len(), 2);
         // Both should be finite
         assert!(objectives[0].is_finite());
@@ -275,7 +286,13 @@ mod tests {
         let domain = TensorTrainDomain::new(config);
         let engine = Engine::new(
             domain,
-            Config { generations: 5, population: 20, survivors: 5, base_seed: 123 },
+            Config {
+                generations: 5,
+                population: 20,
+                survivors: 5,
+                base_seed: 123,
+                worker_addresses: None,
+            },
         );
         let report = engine.run().unwrap();
         assert_eq!(report.history.len(), 5);

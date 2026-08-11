@@ -25,14 +25,15 @@ pub struct FailureDiagnostics {
 
 impl FailureDiagnostics {
     pub fn new(stage: FailureStage, stdout: String, stderr: String) -> Self {
-        FailureDiagnostics { stage, stdout, stderr }
+        FailureDiagnostics {
+            stage,
+            stdout,
+            stderr,
+        }
     }
 
     pub fn to_prompt_fragment(&self) -> String {
-        format!(
-            "[FAILURE at {:?}] stderr:\n{}",
-            self.stage, self.stderr
-        )
+        format!("[FAILURE at {:?}] stderr:\n{}", self.stage, self.stderr)
     }
 }
 

@@ -393,13 +393,20 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
                     let (new_src, arm) = bandit.mutate_and_record_arm(&parent_src, None);
 
                     if std::env::var("FORGE_VERBOSE").is_ok() {
-                        eprintln!("[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
-                            arm, new_src.len(), bandit.best_arm());
+                        eprintln!(
+                            "[forge:mutate] MAB arm={} -> {} octets de source (best_arm={})",
+                            arm,
+                            new_src.len(),
+                            bandit.best_arm()
+                        );
                     }
                     std::env::set_var("FORGE_BANDIT_ARM", arm.to_string());
 
                     let id = crate::fnv1a(&new_src);
-                    return Ok(CudaCode { source: new_src, id });
+                    return Ok(CudaCode {
+                        source: new_src,
+                        id,
+                    });
                 }
             }
 
@@ -420,7 +427,10 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
                     eprintln!("[forge:mutate] LLM -> {} octets de source", new_src.len());
                 }
                 let id = crate::fnv1a(&new_src);
-                return Ok(CudaCode { source: new_src, id });
+                return Ok(CudaCode {
+                    source: new_src,
+                    id,
+                });
             }
         }
         let _ = parents;
@@ -439,7 +449,8 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         let output_bin = env_path.join("cuda_verify");
         let mut comp_cmd = Command::new("nvcc");
         comp_cmd
-            .arg("-O3").arg("-arch=native")
+            .arg("-O3")
+            .arg("-arch=native")
             .arg("--ptxas-options=-v")
             .arg("-o")
             .arg(&output_bin)
@@ -474,7 +485,8 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
         let output_bin = env_path.join("cuda_verify");
         let mut comp_cmd = Command::new("nvcc");
         comp_cmd
-            .arg("-O3").arg("-arch=native")
+            .arg("-O3")
+            .arg("-arch=native")
             .arg("--ptxas-options=-v")
             .arg("-o")
             .arg(&output_bin)
@@ -486,7 +498,9 @@ extern "C" __global__ void compute_kernel(double* c, const double* a, const doub
             Ok(_) => {}
             Err(e) => {
                 let _ = fs::remove_dir_all(&env_path);
-                return Err(ForgeError::Evaluation(format!("Échec compilation nvcc: {e}")));
+                return Err(ForgeError::Evaluation(format!(
+                    "Échec compilation nvcc: {e}"
+                )));
             }
         }
 

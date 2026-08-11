@@ -58,7 +58,9 @@ fn evaluate_candidate<D: Domain>(
 ) -> (bool, Vec<f64>, Option<String>) {
     match domain.verify(candidate, trial) {
         Ok(true) => match domain.measure(candidate, trial) {
-            Ok(objectives) if !objectives.is_empty() && objectives.iter().all(|v| v.is_finite()) => {
+            Ok(objectives)
+                if !objectives.is_empty() && objectives.iter().all(|v| v.is_finite()) =>
+            {
                 (true, objectives, None)
             }
             Ok(_) => (
@@ -71,9 +73,16 @@ fn evaluate_candidate<D: Domain>(
         Ok(false) => (
             false,
             vec![],
-            Some("Porte de vérification rejetée — échec compilation ou assertion mathématique".into()),
+            Some(
+                "Porte de vérification rejetée — échec compilation ou assertion mathématique"
+                    .into(),
+            ),
         ),
-        Err(e) => (false, vec![], Some(format!("Erreur critique d'évaluation: {e}"))),
+        Err(e) => (
+            false,
+            vec![],
+            Some(format!("Erreur critique d'évaluation: {e}")),
+        ),
     }
 }
 
@@ -84,10 +93,9 @@ async fn read_frame<T: DeserializeOwned>(
     socket.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
     if len == 0 || len > MAX_MESSAGE_BYTES {
-        return Err(format!(
-            "Taille de frame invalide: {len} octets (limite {MAX_MESSAGE_BYTES})"
-        )
-        .into());
+        return Err(
+            format!("Taille de frame invalide: {len} octets (limite {MAX_MESSAGE_BYTES})").into(),
+        );
     }
 
     let mut payload = vec![0u8; len];
@@ -147,14 +155,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         #[cfg(unix)]
         {
-            let mut sigint = tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::interrupt(),
-            )
-            .expect("signal SIGINT");
-            let mut sigterm = tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::terminate(),
-            )
-            .expect("signal SIGTERM");
+            let mut sigint =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                    .expect("signal SIGINT");
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("signal SIGTERM");
             tokio::select! {
                 _ = sigint.recv() => tracing::info!("[WORKER] SIGINT reçu"),
                 _ = sigterm.recv() => tracing::info!("[WORKER] SIGTERM reçu"),
@@ -196,8 +202,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn init_domain(kind: &str) -> Result<Arc<WorkerDomain>, Box<dyn std::error::Error>> {
-    let scratch = std::env::var("FORGE_WORKER_SCRATCH")
-        .unwrap_or_else(|_| "./worker_scratch".to_string());
+    let scratch =
+        std::env::var("FORGE_WORKER_SCRATCH").unwrap_or_else(|_| "./worker_scratch".to_string());
     std::fs::create_dir_all(&scratch)?;
 
     match kind {
@@ -244,9 +250,7 @@ async fn handle_connection(
         }
     })
     .await
-    .map_err(|e| {
-        format!("Panique dans le thread d'évaluation (candidat {candidate_id}): {e}")
-    })?;
+    .map_err(|e| format!("Panique dans le thread d'évaluation (candidat {candidate_id}): {e}"))?;
 
     write_frame(socket, &result).await?;
 
