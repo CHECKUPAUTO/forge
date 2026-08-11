@@ -3,6 +3,8 @@
 //!
 //! Les enregistrements système utilisent le préfixe `__forge_system__/` et ne
 //! sont jamais exposés par `iter()`, qui reste réservé aux `GenerationRecord`.
+//! La lecture conserve une compatibilité avec l'ancien checkpoint moteur non
+//! préfixé afin qu'une base créée avant la séparation des namespaces reste lisible.
 
 use std::sync::Arc;
 
@@ -12,6 +14,7 @@ use crate::candidate::CandidateId;
 use crate::error::{ForgeError, Result};
 
 const SYSTEM_PREFIX: &[u8] = b"__forge_system__/";
+const LEGACY_ENGINE_CHECKPOINT_KEY: &[u8] = b"__engine_checkpoint__";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GenerationRecord {
@@ -66,11 +69,15 @@ impl AlgorithmRegistry {
         }
     }
 
+    fn is_system_key(key: &[u8]) -> bool {
+        key.starts_with(SYSTEM_PREFIX) || key == LEGACY_ENGINE_CHECKPOINT_KEY
+    }
+
     /// Parcourt uniquement les enregistrements candidats. Les clés système
-    /// (checkpoint moteur, métadonnées) sont ignorées par construction.
+    /// modernes et l'ancien checkpoint moteur non préfixé sont ignorés.
     pub fn iter(&self) -> impl Iterator<Item = Result<GenerationRecord>> + '_ {
         self.db.iter().filter_map(|res| match res {
-            Ok((key, _ivec)) if key.as_ref().starts_with(SYSTEM_PREFIX) => None,
+            Ok((key, _ivec)) if Self::is_system_key(key.as_ref()) => None,
             Ok((_key, ivec)) => Some(
                 serde_json::from_slice(&ivec)
                     .map_err(|e| ForgeError::Evaluation(format!("Désérialisation: {e}"))),
@@ -86,7 +93,8 @@ impl AlgorithmRegistry {
         out
     }
 
-    /// Commit brut réservé aux données système du moteur.
+    /// Commit brut réservé aux données système du moteur. Toute nouvelle
+    /// écriture utilise le namespace préfixé.
     pub fn commit_raw(&self, key: &[u8], payload: &[u8]) -> Result<()> {
         self.db
             .insert(Self::system_key(key), payload)
@@ -97,11 +105,21 @@ impl AlgorithmRegistry {
         Ok(())
     }
 
+    /// Lit d'abord le namespace courant puis, pour compatibilité de migration,
+    /// retombe sur l'ancienne clé brute si elle existe encore.
     pub fn get_raw(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        self.db
+        let current = self
+            .db
             .get(Self::system_key(key))
+            .map_err(|e| ForgeError::Evaluation(format!("Erreur get_raw Sled: {e}")))?;
+        if let Some(value) = current {
+            return Ok(Some(value.to_vec()));
+        }
+
+        self.db
+            .get(key)
             .map(|opt| opt.map(|ivec| ivec.to_vec()))
-            .map_err(|e| ForgeError::Evaluation(format!("Erreur get_raw Sled: {e}")))
+            .map_err(|e| ForgeError::Evaluation(format!("Erreur get_raw Sled legacy: {e}")))
     }
 
     pub fn len(&self) -> usize {
@@ -109,7 +127,7 @@ impl AlgorithmRegistry {
             .iter()
             .filter(|res| {
                 res.as_ref()
-                    .map(|(key, _)| !key.as_ref().starts_with(SYSTEM_PREFIX))
+                    .map(|(key, _)| !Self::is_system_key(key.as_ref()))
                     .unwrap_or(false)
             })
             .count()
@@ -125,7 +143,7 @@ mod tests {
     use super::*;
 
     fn tmp_path(name: &str) -> String {
-        format!("/tmp/forge_registry_v4_{name}")
+        format!("/tmp/forge_registry_v5_{name}")
     }
 
     #[test]
@@ -161,14 +179,35 @@ mod tests {
             parent_ids: vec![],
         })
         .unwrap();
-        reg.commit_raw(b"__engine_checkpoint__", br#"{"state":1}"#)
+        reg.commit_raw(LEGACY_ENGINE_CHECKPOINT_KEY, br#"{"state":1}"#)
             .unwrap();
 
         let all: Vec<_> = reg.iter().collect::<Result<Vec<_>>>().expect("iter");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].candidate_id, 1);
         assert_eq!(reg.len(), 1);
-        assert!(reg.get_raw(b"__engine_checkpoint__").unwrap().is_some());
+        assert!(reg.get_raw(LEGACY_ENGINE_CHECKPOINT_KEY).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
+    #[test]
+    fn legacy_raw_checkpoint_remains_readable_and_hidden_from_iter() {
+        let path = tmp_path("legacy");
+        let _ = std::fs::remove_dir_all(&path);
+        let reg = AlgorithmRegistry::open(&path).expect("open");
+        let legacy = br#"{"legacy":true}"#;
+        reg.db
+            .insert(LEGACY_ENGINE_CHECKPOINT_KEY, legacy.as_slice())
+            .unwrap();
+        reg.db.flush().unwrap();
+
+        assert_eq!(
+            reg.get_raw(LEGACY_ENGINE_CHECKPOINT_KEY).unwrap(),
+            Some(legacy.to_vec())
+        );
+        let all: Vec<_> = reg.iter().collect::<Result<Vec<_>>>().expect("iter");
+        assert!(all.is_empty());
+        assert_eq!(reg.len(), 0);
         let _ = std::fs::remove_dir_all(&path);
     }
 }
