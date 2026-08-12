@@ -9,7 +9,12 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 pub mod binpack_demo;
+pub mod candidate_envelope;
 pub mod llm_ollama;
+
+pub use candidate_envelope::{
+    CandidateEnvelopeError, CandidateEnvelopeV1, CANDIDATE_ENVELOPE_SCHEMA_VERSION,
+};
 
 pub type ForgeConfig = Config;
 
