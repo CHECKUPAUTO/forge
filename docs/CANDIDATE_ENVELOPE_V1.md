@@ -67,6 +67,13 @@ receivers that parse numbers through IEEE-754 cannot lose `u64` precision.
 
 SHA-256 values are exactly 64 lowercase hexadecimal characters.
 
+`CandidateEnvelopeV1::from_wire_json` is the strict v1 receiving path. It requires
+the complete v1 field set, rejects unknown fields, requires `origin = "forge"`,
+requires the decimal-string representation of `trial_seed`, reconstructs and
+validates the typed envelope, and recomputes the canonical fingerprint before
+returning it. Fingerprint validation detects transport mutation; it is not producer
+authentication.
+
 ## Cross-repository golden vector
 
 Input:
