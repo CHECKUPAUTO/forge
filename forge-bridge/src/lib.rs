@@ -10,6 +10,7 @@ use tracing::info;
 
 pub mod binpack_demo;
 pub mod candidate_envelope;
+mod candidate_envelope_wire;
 pub mod llm_ollama;
 
 pub use candidate_envelope::{
