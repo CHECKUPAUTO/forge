@@ -58,8 +58,7 @@ impl CandidateEnvelopeV1 {
         }
 
         let parent_candidate_id = take_optional_string(&mut object, "parent_candidate_id")?;
-        let producer_candidate_id =
-            take_optional_string(&mut object, "producer_candidate_id")?;
+        let producer_candidate_id = take_optional_string(&mut object, "producer_candidate_id")?;
         let proposal_sha256 = take_optional_string(&mut object, "proposal_sha256")?;
         let schema_version = take_schema_version(&mut object)?;
         let source_sha256 = take_required_string(&mut object, "source_sha256")?;
@@ -118,16 +117,12 @@ fn take_optional_string(
     }
 }
 
-fn take_schema_version(
-    object: &mut Map<String, Value>,
-) -> Result<u16, CandidateEnvelopeError> {
+fn take_schema_version(object: &mut Map<String, Value>) -> Result<u16, CandidateEnvelopeError> {
     let version = match object.remove("schema_version") {
         Some(Value::Number(value)) => value
             .as_u64()
             .and_then(|value| u16::try_from(value).ok())
-            .ok_or_else(|| {
-                wire_error("candidate envelope field `schema_version` must be a u16")
-            })?,
+            .ok_or_else(|| wire_error("candidate envelope field `schema_version` must be a u16"))?,
         Some(_) => {
             return Err(wire_error(
                 "candidate envelope field `schema_version` must be a JSON integer",
@@ -251,7 +246,9 @@ mod tests {
         let mut wire = wire_value();
         wire["unexpected"] = Value::Bool(true);
         let error = CandidateEnvelopeV1::from_wire_json(&wire.to_string()).unwrap_err();
-        assert!(error.to_string().contains("unknown candidate envelope field"));
+        assert!(error
+            .to_string()
+            .contains("unknown candidate envelope field"));
     }
 
     #[test]
