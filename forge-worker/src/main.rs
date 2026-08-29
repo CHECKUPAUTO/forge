@@ -1,12 +1,12 @@
 //! Worker d'évaluation Forge — démon réseau asynchrone Tokio.
 //!
 //! Le worker reçoit des messages bincode encadrés par une longueur u32
-//! big-endian, vérifie l'identité de la source, le domaine et la version du
-//! protocole, puis exécute la vérification et la mesure du candidat.
+//! big-endian, exécute la vérification puis la mesure du candidat et renvoie
+//! une enveloppe de résultat versionnée contenant la provenance descriptive.
 //!
-//! Le contexte retourné est une provenance descriptive, pas une attestation
-//! cryptographique. Le transport reste TCP non authentifié tant que TLS n'est
-//! pas explicitement configuré dans une future évolution.
+//! Le contexte retourné n'est pas une attestation cryptographique. Le transport
+//! reste TCP non authentifié tant qu'une couche TLS/authentification dédiée n'est
+//! pas configurée dans une évolution ultérieure.
 
 use std::net::SocketAddr;
 use std::process::Command;
@@ -314,32 +314,22 @@ async fn handle_connection(
     socket: &mut TcpStream,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let payload: EvaluationPayload = read_frame(socket).await?;
-    payload.validate().map_err(|e| format!("Requête invalide: {e}"))?;
-    if payload.domain != domain.name() {
-        return Err(format!(
-            "Domaine incompatible: requête='{}' worker='{}'",
-            payload.domain,
-            domain.name()
-        )
-        .into());
-    }
 
     tracing::info!(
         "[WORKER] évaluation candidat {} | génération {} | source_hash={:016x}",
         payload.candidate_id,
         payload.generation,
-        payload.source_hash
+        fnv1a(&payload.source_code)
     );
 
     let trial = Trial {
         generation: payload.generation,
         seed: payload.seed,
     };
+    let source_hash = fnv1a(&payload.source_code);
     let source_code = payload.source_code;
     let candidate_id = payload.candidate_id;
-    let source_hash = payload.source_hash;
-    let response_domain = payload.domain;
-    let benchmark_protocol = payload.benchmark_protocol;
+    let response_domain = domain.name().to_string();
 
     let result = tokio::task::spawn_blocking(move || {
         let (is_valid, objectives, error_message) =
@@ -349,7 +339,7 @@ async fn handle_connection(
             candidate_id,
             source_hash,
             domain: response_domain,
-            benchmark_protocol,
+            benchmark_protocol: BENCHMARK_PROTOCOL.to_string(),
             execution_context: context,
             is_valid,
             objectives,
@@ -399,9 +389,9 @@ mod tests {
                 &EvaluationResult {
                     protocol_version: PROTOCOL_VERSION,
                     candidate_id: payload.candidate_id,
-                    source_hash: payload.source_hash,
-                    domain: payload.domain,
-                    benchmark_protocol: payload.benchmark_protocol,
+                    source_hash: fnv1a(&payload.source_code),
+                    domain: "test".into(),
+                    benchmark_protocol: BENCHMARK_PROTOCOL.into(),
                     execution_context: WorkerExecutionContext {
                         worker_id: "test".into(),
                         toolchain: "rustc test".into(),
@@ -422,7 +412,12 @@ mod tests {
         let client = tokio::task::spawn_blocking(move || {
             forge_core::protocol::dispatch_evaluation_to_worker(
                 &addr.to_string(),
-                &EvaluationPayload::new(12, "test", "x".repeat(128 * 1024), 1, 2),
+                &EvaluationPayload {
+                    candidate_id: 12,
+                    source_code: "x".repeat(128 * 1024),
+                    seed: 1,
+                    generation: 2,
+                },
                 std::time::Duration::from_secs(2),
             )
         })
