@@ -1,24 +1,28 @@
 //! Worker d'évaluation Forge — démon réseau asynchrone Tokio.
 //!
 //! Le worker reçoit des messages bincode encadrés par une longueur u32
-//! big-endian, exécute la vérification puis la mesure du candidat et renvoie
-//! un `EvaluationResult` selon le même framing. Le framing partagé avec le
-//! Master évite toute dépendance à EOF et accepte des candidats > 64 KiB.
+//! big-endian, vérifie l'identité de la source, le domaine et la version du
+//! protocole, puis exécute la vérification et la mesure du candidat.
+//!
+//! Le contexte retourné est une provenance descriptive, pas une attestation
+//! cryptographique. Le transport reste TCP non authentifié tant que TLS n'est
+//! pas explicitement configuré dans une future évolution.
 
 use std::net::SocketAddr;
+use std::process::Command;
 use std::sync::Arc;
 
+use forge_core::candidate::fnv1a;
 use forge_core::domains::low_rank::{TensorCode, TensorTrainDomain};
 use forge_core::domains::simd_kernel::{SimdKernelCode, SimdKernelDomain};
-use forge_core::protocol::{EvaluationPayload, EvaluationResult, MAX_MESSAGE_BYTES};
+use forge_core::protocol::{
+    EvaluationPayload, EvaluationResult, WorkerExecutionContext, BENCHMARK_PROTOCOL,
+    MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
+};
 use forge_core::{Domain, Trial};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-
-// ---------------------------------------------------------------------------
-// Enum de dispatch pour les domaines supportés
-// ---------------------------------------------------------------------------
 
 enum WorkerDomain {
     LowRank(TensorTrainDomain),
@@ -26,6 +30,13 @@ enum WorkerDomain {
 }
 
 impl WorkerDomain {
+    fn name(&self) -> &str {
+        match self {
+            WorkerDomain::LowRank(domain) => domain.name(),
+            WorkerDomain::SimdKernel(domain) => domain.name(),
+        }
+    }
+
     fn evaluate(
         &self,
         source_code: &str,
@@ -86,6 +97,77 @@ fn evaluate_candidate<D: Domain>(
     }
 }
 
+fn command_output(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn detected_hardware() -> String {
+    if let Ok(value) = std::env::var("FORGE_WORKER_HARDWARE") {
+        if !value.trim().is_empty() {
+            return value;
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") {
+            for line in cpuinfo.lines() {
+                if let Some((key, value)) = line.split_once(':') {
+                    if matches!(key.trim(), "model name" | "Hardware" | "Processor")
+                        && !value.trim().is_empty()
+                    {
+                        return value.trim().to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Some(cpu) = command_output("sysctl", &["-n", "machdep.cpu.brand_string"]) {
+        return cpu;
+    }
+
+    std::env::var("PROCESSOR_IDENTIFIER")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| format!("{}-hardware-unreported", std::env::consts::ARCH))
+}
+
+fn worker_execution_context(domain: &str) -> WorkerExecutionContext {
+    let worker_id = std::env::var("FORGE_WORKER_ID")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .or_else(|| std::env::var("COMPUTERNAME").ok())
+        .unwrap_or_else(|| "worker-unidentified".into());
+    let toolchain = command_output("rustc", &["-Vv"]).unwrap_or_else(|| "rustc-unreported".into());
+    let hardware = detected_hardware();
+    let os = std::env::consts::OS.to_string();
+    let arch = std::env::consts::ARCH.to_string();
+    let explicit_env = std::env::var("FORGE_WORKER_ENV").unwrap_or_default();
+    let material = format!(
+        "forge-worker:{}|domain={domain}|protocol={PROTOCOL_VERSION}|benchmark={BENCHMARK_PROTOCOL}|os={os}|arch={arch}|hardware={hardware}|toolchain={toolchain}|env={explicit_env}",
+        env!("CARGO_PKG_VERSION")
+    );
+    let environment_fingerprint = format!("fnv1a64:{:016x}", fnv1a(&material));
+
+    WorkerExecutionContext {
+        worker_id,
+        toolchain,
+        os,
+        arch,
+        hardware,
+        environment_fingerprint,
+    }
+}
+
 async fn read_frame<T: DeserializeOwned>(
     socket: &mut TcpStream,
 ) -> Result<T, Box<dyn std::error::Error>> {
@@ -123,10 +205,6 @@ async fn write_frame<T: Serialize>(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Point d'entrée
-// ---------------------------------------------------------------------------
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -141,14 +219,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let domain = init_domain(&domain_kind)
         .map_err(|e| format!("Initialisation domaine '{domain_kind}' échouée: {e}"))?;
 
+    let context = worker_execution_context(domain.name());
+    tracing::info!(
+        worker_id = %context.worker_id,
+        hardware = %context.hardware,
+        environment_fingerprint = %context.environment_fingerprint,
+        "[WORKER] contexte d'exécution"
+    );
+
     let listener = TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("Impossible de binder sur {addr}: {e}"))?;
 
     tracing::info!(
-        "[WORKER] démon d'évaluation actif sur {} | domaine: {}",
+        "[WORKER] démon d'évaluation actif sur {} | domaine: {} | protocole: {}",
         addr,
-        domain_kind
+        domain.name(),
+        PROTOCOL_VERSION
     );
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
@@ -182,8 +269,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match conn {
                     Ok((mut socket, peer)) => {
                         let domain = Arc::clone(&domain);
+                        let context = context.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_connection(domain, &mut socket).await {
+                            if let Err(e) = handle_connection(domain, context, &mut socket).await {
                                 tracing::warn!("[WORKER] erreur traitement {peer}: {e}");
                             }
                         });
@@ -222,14 +310,25 @@ fn init_domain(kind: &str) -> Result<Arc<WorkerDomain>, Box<dyn std::error::Erro
 
 async fn handle_connection(
     domain: Arc<WorkerDomain>,
+    context: WorkerExecutionContext,
     socket: &mut TcpStream,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let payload: EvaluationPayload = read_frame(socket).await?;
+    payload.validate().map_err(|e| format!("Requête invalide: {e}"))?;
+    if payload.domain != domain.name() {
+        return Err(format!(
+            "Domaine incompatible: requête='{}' worker='{}'",
+            payload.domain,
+            domain.name()
+        )
+        .into());
+    }
 
     tracing::info!(
-        "[WORKER] évaluation candidat {} | génération {}",
+        "[WORKER] évaluation candidat {} | génération {} | source_hash={:016x}",
         payload.candidate_id,
-        payload.generation
+        payload.generation,
+        payload.source_hash
     );
 
     let trial = Trial {
@@ -238,12 +337,20 @@ async fn handle_connection(
     };
     let source_code = payload.source_code;
     let candidate_id = payload.candidate_id;
+    let source_hash = payload.source_hash;
+    let response_domain = payload.domain;
+    let benchmark_protocol = payload.benchmark_protocol;
 
     let result = tokio::task::spawn_blocking(move || {
         let (is_valid, objectives, error_message) =
             domain.evaluate(&source_code, candidate_id, &trial);
         EvaluationResult {
+            protocol_version: PROTOCOL_VERSION,
             candidate_id,
+            source_hash,
+            domain: response_domain,
+            benchmark_protocol,
+            execution_context: context,
             is_valid,
             objectives,
             error_message,
@@ -255,10 +362,11 @@ async fn handle_connection(
     write_frame(socket, &result).await?;
 
     tracing::info!(
-        "[WORKER] candidat {} — valid={} | obj={:?}",
+        "[WORKER] candidat {} — valid={} | obj={:?} | env={}",
         result.candidate_id,
         result.is_valid,
-        result.objectives
+        result.objectives,
+        result.execution_context.environment_fingerprint
     );
     Ok(())
 }
@@ -267,6 +375,15 @@ async fn handle_connection(
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn execution_context_is_non_empty_and_stable_within_process() {
+        let first = worker_execution_context("test-domain");
+        let second = worker_execution_context("test-domain");
+        assert!(!first.hardware.is_empty());
+        assert!(!first.toolchain.is_empty());
+        assert_eq!(first.environment_fingerprint, second.environment_fingerprint);
+    }
 
     #[tokio::test]
     async fn frame_roundtrip_accepts_large_payload() {
@@ -280,7 +397,19 @@ mod tests {
             write_frame(
                 &mut socket,
                 &EvaluationResult {
+                    protocol_version: PROTOCOL_VERSION,
                     candidate_id: payload.candidate_id,
+                    source_hash: payload.source_hash,
+                    domain: payload.domain,
+                    benchmark_protocol: payload.benchmark_protocol,
+                    execution_context: WorkerExecutionContext {
+                        worker_id: "test".into(),
+                        toolchain: "rustc test".into(),
+                        os: "test".into(),
+                        arch: "test".into(),
+                        hardware: "test-hardware".into(),
+                        environment_fingerprint: "test-env".into(),
+                    },
                     is_valid: true,
                     objectives: vec![1.0],
                     error_message: None,
@@ -293,12 +422,7 @@ mod tests {
         let client = tokio::task::spawn_blocking(move || {
             forge_core::protocol::dispatch_evaluation_to_worker(
                 &addr.to_string(),
-                &EvaluationPayload {
-                    candidate_id: 12,
-                    source_code: "x".repeat(128 * 1024),
-                    seed: 1,
-                    generation: 2,
-                },
+                &EvaluationPayload::new(12, "test", "x".repeat(128 * 1024), 1, 2),
                 std::time::Duration::from_secs(2),
             )
         })
