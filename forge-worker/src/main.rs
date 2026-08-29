@@ -372,7 +372,10 @@ mod tests {
         let second = worker_execution_context("test-domain");
         assert!(!first.hardware.is_empty());
         assert!(!first.toolchain.is_empty());
-        assert_eq!(first.environment_fingerprint, second.environment_fingerprint);
+        assert_eq!(
+            first.environment_fingerprint,
+            second.environment_fingerprint
+        );
     }
 
     #[tokio::test]
