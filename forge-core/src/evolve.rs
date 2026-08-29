@@ -659,7 +659,12 @@ fn evaluate_distributed_dynamic<C: Candidate>(
                     generation: current_gen,
                 };
 
-                match dispatch_evaluation_to_worker(&worker_addr, &payload, timeout) {
+                match dispatch_evaluation_to_worker(
+                    &worker_addr,
+                    &payload,
+                    domain.name(),
+                    timeout,
+                ) {
                     Ok(eval_res) => {
                         // Succès : libérer le worker
                         pool.release(&worker_addr);
@@ -761,7 +766,8 @@ fn evaluate_distributed_dynamic<C: Candidate>(
 // ---------------------------------------------------------------------------
 
 /// Évalue une population entière en distribuant les calculs sur un pool
-/// de Workers distants via le protocole binaire TCP.
+/// de Workers distants via le protocole binaire TCP. Chaque réponse doit
+/// déclarer exactement `expected_domain` avant d'être acceptée.
 ///
 /// # Stratégie de répartition
 /// Round-Robin : le candidat d'index `i` est envoyé au Worker `i % workers.len()`.
@@ -774,6 +780,7 @@ fn evaluate_distributed_dynamic<C: Candidate>(
 pub fn evaluate_parallel_distributed<C: Candidate>(
     population: &[C],
     workers: &[String],
+    expected_domain: &str,
     trial: &Trial,
     registry: Option<&AlgorithmRegistry>,
     cache: Option<&EvaluationCache>,
@@ -805,7 +812,7 @@ pub fn evaluate_parallel_distributed<C: Candidate>(
                 generation: current_gen,
             };
 
-            match dispatch_evaluation_to_worker(worker_addr, &payload, timeout) {
+            match dispatch_evaluation_to_worker(worker_addr, &payload, expected_domain, timeout) {
                 Ok(eval_res) => {
                     if eval_res.is_valid {
                         // Insertion cache
