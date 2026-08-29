@@ -261,12 +261,8 @@ mod tests {
             seed: 0,
             generation: 0,
         };
-        let result = dispatch_evaluation_to_worker(
-            "invalid-addr",
-            &payload,
-            "test",
-            Duration::from_secs(1),
-        );
+        let result =
+            dispatch_evaluation_to_worker("invalid-addr", &payload, "test", Duration::from_secs(1));
         assert!(result.is_err());
     }
 
@@ -335,15 +331,13 @@ mod tests {
             seed: 1,
             generation: 1,
         };
-        assert!(
-            dispatch_evaluation_to_worker(
-                &addr.to_string(),
-                &payload,
-                "test",
-                Duration::from_secs(2)
-            )
-            .is_err()
-        );
+        assert!(dispatch_evaluation_to_worker(
+            &addr.to_string(),
+            &payload,
+            "test",
+            Duration::from_secs(2)
+        )
+        .is_err());
         worker.join().expect("worker thread");
     }
 
@@ -373,15 +367,13 @@ mod tests {
             seed: 1,
             generation: 1,
         };
-        assert!(
-            dispatch_evaluation_to_worker(
-                &addr.to_string(),
-                &payload,
-                "expected-domain",
-                Duration::from_secs(2)
-            )
-            .is_err()
-        );
+        assert!(dispatch_evaluation_to_worker(
+            &addr.to_string(),
+            &payload,
+            "expected-domain",
+            Duration::from_secs(2)
+        )
+        .is_err());
         worker.join().expect("worker thread");
     }
 
@@ -413,15 +405,13 @@ mod tests {
             seed: 1,
             generation: 1,
         };
-        assert!(
-            dispatch_evaluation_to_worker(
-                &addr.to_string(),
-                &payload,
-                "test",
-                Duration::from_secs(2)
-            )
-            .is_err()
-        );
+        assert!(dispatch_evaluation_to_worker(
+            &addr.to_string(),
+            &payload,
+            "test",
+            Duration::from_secs(2)
+        )
+        .is_err());
         worker.join().expect("worker thread");
     }
 }
