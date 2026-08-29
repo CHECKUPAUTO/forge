@@ -16,13 +16,12 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use forge_core::candidate::fnv1a;
 use forge_core::evaluate_parallel_distributed;
 use forge_core::protocol::{
     EvaluationPayload, EvaluationResult, WorkerExecutionContext, BENCHMARK_PROTOCOL,
     PROTOCOL_VERSION,
 };
-use forge_core::{Candidate, CandidateId};
+use forge_core::{fnv1a, Candidate, CandidateId};
 use forge_core::{Individual, Trial};
 
 const STUB_DOMAIN: &str = "stub-domain";
