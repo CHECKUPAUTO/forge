@@ -14,9 +14,19 @@ Do not run arbitrary third-party candidate code directly on a production host me
 
 ## Master / Worker trust
 
-The current Master/Worker protocol is a length-prefixed bincode protocol over TCP. It validates framing, message size, candidate identity, and finite objective values, but it does **not** provide TLS, authentication, or cryptographic execution attestation.
+The current Master/Worker transport is a length-prefixed bincode protocol over TCP. Frames are bounded. The master rejects candidate-ID mismatches, source-hash mismatches, unsupported result-envelope versions, non-finite/empty valid objectives, unknown benchmark-protocol identifiers, and results without a declared execution context.
 
-Therefore:
+The worker result envelope records:
+
+- the result protocol version;
+- an independent FNV-1a hash of the exact source received;
+- the domain actually used by the worker;
+- the verify-then-measure benchmark protocol identifier;
+- worker identity, toolchain, OS, architecture, hardware description, and an environment fingerprint.
+
+This is **provenance binding, not cryptographic attestation**. FNV-1a is used only as a deterministic content identity/check, not as a signature or security primitive.
+
+The protocol still does **not** provide TLS, worker authentication, or cryptographic proof that the claimed execution occurred. Therefore:
 
 - deploy workers only on a trusted network or behind an authenticated encrypted tunnel/VPN;
 - treat configured workers as trusted evaluators;
@@ -31,9 +41,11 @@ CUDA and other accelerator-backed domains also depend on the isolation and reset
 
 ## Measurement integrity
 
-Forge separates correctness verification from performance measurement. Evaluation cache entries are scoped by domain, trial seed, Forge version, OS/architecture and an optional `FORGE_CACHE_ENV` fingerprint. Set `FORGE_CACHE_ENV` to a stable identifier for the relevant toolchain/hardware configuration when persistent benchmark caches are shared across runs.
+Forge separates correctness verification from performance measurement. Remote workers now return an explicit execution-context fingerprint with every result so operators can retain the hardware/toolchain provenance of measurements.
 
-When changing compiler flags, toolchain versions, CPU/GPU configuration, benchmark harnesses or relevant environment settings, use a different `FORGE_CACHE_ENV` or a fresh cache.
+Persistent cache reuse is conservative: `EvaluationCache` does not return cached scores unless an explicit context identity is supplied through `FORGE_CACHE_ENV` or `with_environment_fingerprint`. This prevents the default configuration from silently reusing a benchmark score when the master cannot prove that the relevant hardware/toolchain/benchmark context is the same. Cache records remain scoped by domain, trial seed, candidate identity, Forge version, OS/architecture and the explicit environment identity.
+
+For a homogeneous worker pool, set `FORGE_CACHE_ENV` to a stable identifier that uniquely represents the complete benchmark context (toolchain, compiler flags, CPU/GPU model/configuration, benchmark harness and relevant environment). For heterogeneous workers, use distinct context identities or leave reuse disabled.
 
 ## Reporting vulnerabilities
 
