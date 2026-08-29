@@ -167,7 +167,11 @@ pub fn dispatch_evaluation_to_worker(
             result.benchmark_protocol
         )));
     }
-    if result.execution_context.environment_fingerprint.trim().is_empty()
+    if result
+        .execution_context
+        .environment_fingerprint
+        .trim()
+        .is_empty()
         || result.execution_context.hardware.trim().is_empty()
         || result.execution_context.toolchain.trim().is_empty()
     {
@@ -246,7 +250,8 @@ mod tests {
             seed: 0,
             generation: 0,
         };
-        let result = dispatch_evaluation_to_worker("invalid-addr", &payload, Duration::from_secs(1));
+        let result =
+            dispatch_evaluation_to_worker("invalid-addr", &payload, Duration::from_secs(1));
         assert!(result.is_err());
     }
 
@@ -277,12 +282,9 @@ mod tests {
             seed: 123,
             generation: 9,
         };
-        let result = dispatch_evaluation_to_worker(
-            &addr.to_string(),
-            &payload,
-            Duration::from_secs(2),
-        )
-        .expect("dispatch");
+        let result =
+            dispatch_evaluation_to_worker(&addr.to_string(), &payload, Duration::from_secs(2))
+                .expect("dispatch");
         assert_eq!(result.candidate_id, 77);
         assert_eq!(result.objectives, vec![42.0]);
         worker.join().expect("worker thread");
@@ -314,7 +316,10 @@ mod tests {
             seed: 1,
             generation: 1,
         };
-        assert!(dispatch_evaluation_to_worker(&addr.to_string(), &payload, Duration::from_secs(2)).is_err());
+        assert!(
+            dispatch_evaluation_to_worker(&addr.to_string(), &payload, Duration::from_secs(2))
+                .is_err()
+        );
         worker.join().expect("worker thread");
     }
 }
