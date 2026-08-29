@@ -659,12 +659,8 @@ fn evaluate_distributed_dynamic<C: Candidate>(
                     generation: current_gen,
                 };
 
-                match dispatch_evaluation_to_worker(
-                    &worker_addr,
-                    &payload,
-                    domain.name(),
-                    timeout,
-                ) {
+                match dispatch_evaluation_to_worker(&worker_addr, &payload, domain.name(), timeout)
+                {
                     Ok(eval_res) => {
                         // Succès : libérer le worker
                         pool.release(&worker_addr);
