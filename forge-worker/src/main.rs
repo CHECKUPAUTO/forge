@@ -370,8 +370,11 @@ mod tests {
     fn execution_context_is_non_empty_and_stable_within_process() {
         let first = worker_execution_context("test-domain");
         let second = worker_execution_context("test-domain");
+        assert!(!first.worker_id.is_empty());
         assert!(!first.hardware.is_empty());
         assert!(!first.toolchain.is_empty());
+        assert!(!first.os.is_empty());
+        assert!(!first.arch.is_empty());
         assert_eq!(
             first.environment_fingerprint,
             second.environment_fingerprint
@@ -421,6 +424,7 @@ mod tests {
                     seed: 1,
                     generation: 2,
                 },
+                "test",
                 std::time::Duration::from_secs(2),
             )
         })
