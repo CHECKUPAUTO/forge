@@ -16,10 +16,16 @@ use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use forge_core::candidate::fnv1a;
 use forge_core::evaluate_parallel_distributed;
-use forge_core::protocol::{EvaluationPayload, EvaluationResult};
+use forge_core::protocol::{
+    EvaluationPayload, EvaluationResult, WorkerExecutionContext, BENCHMARK_PROTOCOL,
+    PROTOCOL_VERSION,
+};
 use forge_core::{Candidate, CandidateId};
 use forge_core::{Individual, Trial};
+
+const STUB_DOMAIN: &str = "stub-domain";
 
 fn read_frame<T: serde::de::DeserializeOwned>(stream: &mut std::net::TcpStream) -> T {
     let mut len = [0u8; 4];
@@ -65,6 +71,36 @@ impl Candidate for StubCandidate {
 // Logique d'évaluation du Worker mock
 // ---------------------------------------------------------------------------
 
+fn worker_context() -> WorkerExecutionContext {
+    WorkerExecutionContext {
+        worker_id: "stub-worker".into(),
+        toolchain: "rustc-test".into(),
+        os: "test-os".into(),
+        arch: "test-arch".into(),
+        hardware: "test-hardware".into(),
+        environment_fingerprint: "test-environment".into(),
+    }
+}
+
+fn result_for(
+    payload: &EvaluationPayload,
+    is_valid: bool,
+    objectives: Vec<f64>,
+    error_message: Option<String>,
+) -> EvaluationResult {
+    EvaluationResult {
+        protocol_version: PROTOCOL_VERSION,
+        candidate_id: payload.candidate_id,
+        source_hash: fnv1a(&payload.source_code),
+        domain: STUB_DOMAIN.into(),
+        benchmark_protocol: BENCHMARK_PROTOCOL.into(),
+        execution_context: worker_context(),
+        is_valid,
+        objectives,
+        error_message,
+    }
+}
+
 /// Évalue un candidat reçu dans le Worker mock.
 ///
 /// - `valid_*` → valide avec objectifs simulés
@@ -72,31 +108,26 @@ impl Candidate for StubCandidate {
 /// - `loop_*` → invalide (timeout / boucle infinie simulée)
 fn evaluate_stub(payload: &EvaluationPayload) -> EvaluationResult {
     if payload.source_code.contains("syntax_error") {
-        EvaluationResult {
-            candidate_id: payload.candidate_id,
-            is_valid: false,
-            objectives: vec![],
-            error_message: Some(format!(
+        result_for(
+            payload,
+            false,
+            vec![],
+            Some(format!(
                 "Erreur de compilation simulée: unexpected token in '{}'",
                 payload.source_code
             )),
-        }
+        )
     } else if payload.source_code.contains("loop_infinite") {
-        EvaluationResult {
-            candidate_id: payload.candidate_id,
-            is_valid: false,
-            objectives: vec![],
-            error_message: Some("Timeout dépassé : boucle infinie détectée, processus tué.".into()),
-        }
+        result_for(
+            payload,
+            false,
+            vec![],
+            Some("Timeout dépassé : boucle infinie détectée, processus tué.".into()),
+        )
     } else {
         // Candidat valide — objectifs simulés
         let base_latency = 1000.0 + (payload.candidate_id as f64 % 100.0) * 10.0;
-        EvaluationResult {
-            candidate_id: payload.candidate_id,
-            is_valid: true,
-            objectives: vec![0.001, base_latency, 50.0],
-            error_message: None,
-        }
+        result_for(payload, true, vec![0.001, base_latency, 50.0], None)
     }
 }
 
@@ -202,6 +233,7 @@ fn test_distributed_evolution_under_stress() {
     let individuals: Vec<Individual<StubCandidate>> = evaluate_parallel_distributed(
         &population,
         &workers,
+        STUB_DOMAIN,
         &trial,
         None, // pas de registre Sled dans ce test
         None,
@@ -303,8 +335,16 @@ fn test_distributed_worker_unreachable_is_resilient() {
     };
     let failure_sink = Mutex::new(Vec::new());
 
-    let individuals: Vec<Individual<StubCandidate>> =
-        evaluate_parallel_distributed(&population, &workers, &trial, None, None, 0, &failure_sink);
+    let individuals: Vec<Individual<StubCandidate>> = evaluate_parallel_distributed(
+        &population,
+        &workers,
+        STUB_DOMAIN,
+        &trial,
+        None,
+        None,
+        0,
+        &failure_sink,
+    );
 
     // Tous les candidats doivent revenir (marqués invalides)
     assert_eq!(individuals.len(), 5);
@@ -391,8 +431,16 @@ fn test_round_robin_distribution() {
     };
     let failure_sink = Mutex::new(Vec::new());
 
-    let individuals: Vec<Individual<StubCandidate>> =
-        evaluate_parallel_distributed(&population, &workers, &trial, None, None, 0, &failure_sink);
+    let individuals: Vec<Individual<StubCandidate>> = evaluate_parallel_distributed(
+        &population,
+        &workers,
+        STUB_DOMAIN,
+        &trial,
+        None,
+        None,
+        0,
+        &failure_sink,
+    );
 
     assert_eq!(individuals.len(), 10);
     // Tous valides
