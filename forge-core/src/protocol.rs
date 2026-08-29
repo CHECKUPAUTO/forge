@@ -116,12 +116,20 @@ fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut TcpStream) -> Result<T>
 }
 
 /// Envoie un [`EvaluationPayload`] à un Worker distant et récupère le
-/// [`EvaluationResult`]. Conçu pour être appelé depuis un thread Rayon.
+/// [`EvaluationResult`]. Le résultat n'est accepté que si le worker confirme
+/// exactement le domaine attendu par le master.
 pub fn dispatch_evaluation_to_worker(
     addr: &str,
     payload: &EvaluationPayload,
+    expected_domain: &str,
     timeout: Duration,
 ) -> Result<EvaluationResult> {
+    if expected_domain.trim().is_empty() {
+        return Err(ForgeError::Evaluation(
+            "Domaine attendu vide pour l'évaluation distribuée".into(),
+        ));
+    }
+
     let socket_addr: SocketAddr = addr
         .parse()
         .map_err(|e| ForgeError::Evaluation(format!("Adresse worker invalide '{addr}': {e}")))?;
@@ -158,8 +166,11 @@ pub fn dispatch_evaluation_to_worker(
             result.source_hash
         )));
     }
-    if result.domain.trim().is_empty() {
-        return Err(ForgeError::Evaluation("Réponse worker sans domaine".into()));
+    if result.domain != expected_domain {
+        return Err(ForgeError::Evaluation(format!(
+            "Réponse worker incohérente: domain='{}' attendu='{expected_domain}'",
+            result.domain
+        )));
     }
     if result.benchmark_protocol != BENCHMARK_PROTOCOL {
         return Err(ForgeError::Evaluation(format!(
@@ -167,13 +178,13 @@ pub fn dispatch_evaluation_to_worker(
             result.benchmark_protocol
         )));
     }
-    if result
-        .execution_context
-        .environment_fingerprint
-        .trim()
-        .is_empty()
-        || result.execution_context.hardware.trim().is_empty()
-        || result.execution_context.toolchain.trim().is_empty()
+    let context = &result.execution_context;
+    if context.worker_id.trim().is_empty()
+        || context.toolchain.trim().is_empty()
+        || context.os.trim().is_empty()
+        || context.arch.trim().is_empty()
+        || context.hardware.trim().is_empty()
+        || context.environment_fingerprint.trim().is_empty()
     {
         return Err(ForgeError::Evaluation(
             "Réponse worker sans contexte reproductible complet".into(),
@@ -250,8 +261,12 @@ mod tests {
             seed: 0,
             generation: 0,
         };
-        let result =
-            dispatch_evaluation_to_worker("invalid-addr", &payload, Duration::from_secs(1));
+        let result = dispatch_evaluation_to_worker(
+            "invalid-addr",
+            &payload,
+            "test",
+            Duration::from_secs(1),
+        );
         assert!(result.is_err());
     }
 
@@ -282,9 +297,13 @@ mod tests {
             seed: 123,
             generation: 9,
         };
-        let result =
-            dispatch_evaluation_to_worker(&addr.to_string(), &payload, Duration::from_secs(2))
-                .expect("dispatch");
+        let result = dispatch_evaluation_to_worker(
+            &addr.to_string(),
+            &payload,
+            "test",
+            Duration::from_secs(2),
+        )
+        .expect("dispatch");
         assert_eq!(result.candidate_id, 77);
         assert_eq!(result.objectives, vec![42.0]);
         worker.join().expect("worker thread");
@@ -317,8 +336,91 @@ mod tests {
             generation: 1,
         };
         assert!(
-            dispatch_evaluation_to_worker(&addr.to_string(), &payload, Duration::from_secs(2))
-                .is_err()
+            dispatch_evaluation_to_worker(
+                &addr.to_string(),
+                &payload,
+                "test",
+                Duration::from_secs(2)
+            )
+            .is_err()
+        );
+        worker.join().expect("worker thread");
+    }
+
+    #[test]
+    fn dispatch_rejects_wrong_domain() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let payload: EvaluationPayload = read_frame(&mut stream).expect("read request");
+            let result = EvaluationResult {
+                protocol_version: PROTOCOL_VERSION,
+                candidate_id: payload.candidate_id,
+                source_hash: fnv1a(&payload.source_code),
+                domain: "wrong-domain".into(),
+                benchmark_protocol: BENCHMARK_PROTOCOL.into(),
+                execution_context: context(),
+                is_valid: true,
+                objectives: vec![1.0],
+                error_message: None,
+            };
+            write_frame(&mut stream, &result).expect("write response");
+        });
+        let payload = EvaluationPayload {
+            candidate_id: 6,
+            source_code: "actual-source".into(),
+            seed: 1,
+            generation: 1,
+        };
+        assert!(
+            dispatch_evaluation_to_worker(
+                &addr.to_string(),
+                &payload,
+                "expected-domain",
+                Duration::from_secs(2)
+            )
+            .is_err()
+        );
+        worker.join().expect("worker thread");
+    }
+
+    #[test]
+    fn dispatch_rejects_incomplete_execution_context() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let payload: EvaluationPayload = read_frame(&mut stream).expect("read request");
+            let mut incomplete_context = context();
+            incomplete_context.worker_id.clear();
+            let result = EvaluationResult {
+                protocol_version: PROTOCOL_VERSION,
+                candidate_id: payload.candidate_id,
+                source_hash: fnv1a(&payload.source_code),
+                domain: "test".into(),
+                benchmark_protocol: BENCHMARK_PROTOCOL.into(),
+                execution_context: incomplete_context,
+                is_valid: true,
+                objectives: vec![1.0],
+                error_message: None,
+            };
+            write_frame(&mut stream, &result).expect("write response");
+        });
+        let payload = EvaluationPayload {
+            candidate_id: 7,
+            source_code: "actual-source".into(),
+            seed: 1,
+            generation: 1,
+        };
+        assert!(
+            dispatch_evaluation_to_worker(
+                &addr.to_string(),
+                &payload,
+                "test",
+                Duration::from_secs(2)
+            )
+            .is_err()
         );
         worker.join().expect("worker thread");
     }
