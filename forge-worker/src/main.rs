@@ -12,14 +12,13 @@ use std::net::SocketAddr;
 use std::process::Command;
 use std::sync::Arc;
 
-use forge_core::candidate::fnv1a;
 use forge_core::domains::low_rank::{TensorCode, TensorTrainDomain};
 use forge_core::domains::simd_kernel::{SimdKernelCode, SimdKernelDomain};
 use forge_core::protocol::{
     EvaluationPayload, EvaluationResult, WorkerExecutionContext, BENCHMARK_PROTOCOL,
     MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
 };
-use forge_core::{Domain, Trial};
+use forge_core::{fnv1a, Domain, Trial};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
