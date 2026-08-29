@@ -773,6 +773,7 @@ fn evaluate_distributed_dynamic<C: Candidate>(
 ///   marqué comme invalide et un `FailureDiagnostics` est collecté.
 /// - La génération n'est **pas** interrompue par les échecs réseau.
 /// - Les résultats valides sont persistés dans le registre Sled si fourni.
+#[allow(clippy::too_many_arguments)]
 pub fn evaluate_parallel_distributed<C: Candidate>(
     population: &[C],
     workers: &[String],
