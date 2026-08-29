@@ -2,10 +2,10 @@
 //! d'évaluation. Le transport utilise `bincode` avec un framing explicite :
 //! un entier u32 big-endian contenant la taille, suivi du payload sérialisé.
 //!
-//! Le protocole lie explicitement chaque résultat au candidat, au domaine, au
-//! protocole de benchmark et au contexte d'exécution déclaré par le worker.
-//! Cette liaison améliore la provenance et la reproductibilité, mais ne constitue
-//! pas une attestation cryptographique et ne remplace ni TLS ni l'authentification.
+//! Le résultat distant inclut une enveloppe de provenance descriptive liant le
+//! score à la source effectivement reçue, au domaine, au protocole de benchmark
+//! et au contexte d'exécution déclaré par le worker. Ce n'est pas une attestation
+//! cryptographique et cela ne remplace ni TLS ni l'authentification.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -18,15 +18,12 @@ use crate::error::{ForgeError, Result};
 
 /// Taille maximale d'un message Forge sur le réseau (code candidat inclus).
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
-/// Version explicite du protocole Master/Worker.
+/// Version explicite de l'enveloppe de résultat distribuée.
 pub const PROTOCOL_VERSION: u32 = 2;
 /// Identifiant du protocole de mesure Forge : vérification indépendante puis mesure.
 pub const BENCHMARK_PROTOCOL: &str = "forge.verify-then-measure.v1";
 
 /// Contexte d'exécution déclaré par un worker pour contextualiser un score.
-///
-/// Les champs sont descriptifs et vérifiés pour cohérence de transport. Ils ne
-/// sont pas une preuve cryptographique de l'exécution réelle.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct WorkerExecutionContext {
     pub worker_id: String,
@@ -38,18 +35,11 @@ pub struct WorkerExecutionContext {
 }
 
 /// Paquet envoyé par le Master à un Worker pour demander l'évaluation
-/// d'un candidat.
+/// d'un candidat. Cette forme reste stable pour préserver les appelants Rust.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EvaluationPayload {
-    pub protocol_version: u32,
-    /// Identifiant unique du candidat (identité de domaine).
+    /// Identifiant unique du candidat (hash d'identité du domaine).
     pub candidate_id: CandidateId,
-    /// Hash indépendant de la représentation source transmise.
-    pub source_hash: u64,
-    /// Nom canonique du domaine attendu.
-    pub domain: String,
-    /// Protocole de benchmark attendu.
-    pub benchmark_protocol: String,
     /// Code source du candidat à compiler et exécuter.
     pub source_code: String,
     /// Graine du trial pour reproductibilité.
@@ -58,65 +48,18 @@ pub struct EvaluationPayload {
     pub generation: u64,
 }
 
-impl EvaluationPayload {
-    pub fn new(
-        candidate_id: CandidateId,
-        domain: impl Into<String>,
-        source_code: String,
-        seed: u64,
-        generation: u64,
-    ) -> Self {
-        let source_hash = fnv1a(&source_code);
-        Self {
-            protocol_version: PROTOCOL_VERSION,
-            candidate_id,
-            source_hash,
-            domain: domain.into(),
-            benchmark_protocol: BENCHMARK_PROTOCOL.to_string(),
-            source_code,
-            seed,
-            generation,
-        }
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        if self.protocol_version != PROTOCOL_VERSION {
-            return Err(ForgeError::Evaluation(format!(
-                "Version de protocole incompatible: {} attendu={PROTOCOL_VERSION}",
-                self.protocol_version
-            )));
-        }
-        if self.benchmark_protocol != BENCHMARK_PROTOCOL {
-            return Err(ForgeError::Evaluation(format!(
-                "Protocole de benchmark incompatible: '{}' attendu='{BENCHMARK_PROTOCOL}'",
-                self.benchmark_protocol
-            )));
-        }
-        if self.domain.trim().is_empty() {
-            return Err(ForgeError::Evaluation("Domaine worker vide".into()));
-        }
-        let actual = fnv1a(&self.source_code);
-        if actual != self.source_hash {
-            return Err(ForgeError::Evaluation(format!(
-                "Identité source incohérente: hash={actual:016x} attendu={:016x}",
-                self.source_hash
-            )));
-        }
-        Ok(())
-    }
-}
-
 /// Réponse renvoyée par le Worker après évaluation.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EvaluationResult {
+    /// Version de l'enveloppe de provenance.
     pub protocol_version: u32,
     /// Identifiant du candidat évalué.
     pub candidate_id: CandidateId,
-    /// Hash de la source effectivement reçue par le worker.
+    /// Hash indépendant de la source effectivement reçue.
     pub source_hash: u64,
     /// Domaine effectivement utilisé par le worker.
     pub domain: String,
-    /// Protocole de benchmark effectivement appliqué.
+    /// Protocole de benchmark appliqué.
     pub benchmark_protocol: String,
     /// Contexte d'exécution déclaré du worker.
     pub execution_context: WorkerExecutionContext,
@@ -179,8 +122,6 @@ pub fn dispatch_evaluation_to_worker(
     payload: &EvaluationPayload,
     timeout: Duration,
 ) -> Result<EvaluationResult> {
-    payload.validate()?;
-
     let socket_addr: SocketAddr = addr
         .parse()
         .map_err(|e| ForgeError::Evaluation(format!("Adresse worker invalide '{addr}': {e}")))?;
@@ -210,22 +151,20 @@ pub fn dispatch_evaluation_to_worker(
             result.candidate_id, payload.candidate_id
         )));
     }
-    if result.source_hash != payload.source_hash {
+    let expected_source_hash = fnv1a(&payload.source_code);
+    if result.source_hash != expected_source_hash {
         return Err(ForgeError::Evaluation(format!(
-            "Réponse worker incohérente: source_hash={:016x} attendu={:016x}",
-            result.source_hash, payload.source_hash
+            "Réponse worker incohérente: source_hash={:016x} attendu={expected_source_hash:016x}",
+            result.source_hash
         )));
     }
-    if result.domain != payload.domain {
-        return Err(ForgeError::Evaluation(format!(
-            "Réponse worker incohérente: domaine='{}' attendu='{}'",
-            result.domain, payload.domain
-        )));
+    if result.domain.trim().is_empty() {
+        return Err(ForgeError::Evaluation("Réponse worker sans domaine".into()));
     }
-    if result.benchmark_protocol != payload.benchmark_protocol {
+    if result.benchmark_protocol != BENCHMARK_PROTOCOL {
         return Err(ForgeError::Evaluation(format!(
-            "Réponse worker incohérente: benchmark_protocol='{}' attendu='{}'",
-            result.benchmark_protocol, payload.benchmark_protocol
+            "Réponse worker incohérente: benchmark_protocol='{}' attendu='{BENCHMARK_PROTOCOL}'",
+            result.benchmark_protocol
         )));
     }
     if result.execution_context.environment_fingerprint.trim().is_empty()
@@ -266,20 +205,18 @@ mod tests {
 
     #[test]
     fn test_payload_bincode_roundtrip() {
-        let payload = EvaluationPayload::new(0xABCD_1234, "test", "fn main() {}".into(), 42, 7);
+        let payload = EvaluationPayload {
+            candidate_id: 0xABCD_1234,
+            source_code: "fn main() {}".into(),
+            seed: 42,
+            generation: 7,
+        };
         let bytes = bincode::serialize(&payload).expect("sérialisation");
         let recovered: EvaluationPayload = bincode::deserialize(&bytes).expect("désérialisation");
-        assert_eq!(recovered.protocol_version, PROTOCOL_VERSION);
-        assert_eq!(recovered.source_hash, payload.source_hash);
-        assert_eq!(recovered.domain, "test");
-        recovered.validate().expect("valid payload");
-    }
-
-    #[test]
-    fn payload_rejects_source_identity_mismatch() {
-        let mut payload = EvaluationPayload::new(1, "test", "source-a".into(), 0, 0);
-        payload.source_code = "source-b".into();
-        assert!(payload.validate().is_err());
+        assert_eq!(recovered.candidate_id, payload.candidate_id);
+        assert_eq!(recovered.source_code, payload.source_code);
+        assert_eq!(recovered.seed, payload.seed);
+        assert_eq!(recovered.generation, payload.generation);
     }
 
     #[test]
@@ -303,7 +240,12 @@ mod tests {
 
     #[test]
     fn test_dispatch_invalid_addr() {
-        let payload = EvaluationPayload::new(1, "test", "fn main() {}".into(), 0, 0);
+        let payload = EvaluationPayload {
+            candidate_id: 1,
+            source_code: "fn main() {}".into(),
+            seed: 0,
+            generation: 0,
+        };
         let result = dispatch_evaluation_to_worker("invalid-addr", &payload, Duration::from_secs(1));
         assert!(result.is_err());
     }
@@ -318,9 +260,9 @@ mod tests {
             let result = EvaluationResult {
                 protocol_version: PROTOCOL_VERSION,
                 candidate_id: payload.candidate_id,
-                source_hash: payload.source_hash,
-                domain: payload.domain,
-                benchmark_protocol: payload.benchmark_protocol,
+                source_hash: fnv1a(&payload.source_code),
+                domain: "test".into(),
+                benchmark_protocol: BENCHMARK_PROTOCOL.into(),
                 execution_context: context(),
                 is_valid: true,
                 objectives: vec![42.0],
@@ -329,7 +271,12 @@ mod tests {
             write_frame(&mut stream, &result).expect("write response");
         });
 
-        let payload = EvaluationPayload::new(77, "test", "x".repeat(128 * 1024), 123, 9);
+        let payload = EvaluationPayload {
+            candidate_id: 77,
+            source_code: "x".repeat(128 * 1024),
+            seed: 123,
+            generation: 9,
+        };
         let result = dispatch_evaluation_to_worker(
             &addr.to_string(),
             &payload,
@@ -338,6 +285,36 @@ mod tests {
         .expect("dispatch");
         assert_eq!(result.candidate_id, 77);
         assert_eq!(result.objectives, vec![42.0]);
+        worker.join().expect("worker thread");
+    }
+
+    #[test]
+    fn dispatch_rejects_wrong_source_hash() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let payload: EvaluationPayload = read_frame(&mut stream).expect("read request");
+            let result = EvaluationResult {
+                protocol_version: PROTOCOL_VERSION,
+                candidate_id: payload.candidate_id,
+                source_hash: 0,
+                domain: "test".into(),
+                benchmark_protocol: BENCHMARK_PROTOCOL.into(),
+                execution_context: context(),
+                is_valid: true,
+                objectives: vec![1.0],
+                error_message: None,
+            };
+            write_frame(&mut stream, &result).expect("write response");
+        });
+        let payload = EvaluationPayload {
+            candidate_id: 5,
+            source_code: "actual-source".into(),
+            seed: 1,
+            generation: 1,
+        };
+        assert!(dispatch_evaluation_to_worker(&addr.to_string(), &payload, Duration::from_secs(2)).is_err());
         worker.join().expect("worker thread");
     }
 }
