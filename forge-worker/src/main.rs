@@ -4,9 +4,12 @@
 //! big-endian, exécute la vérification puis la mesure du candidat et renvoie
 //! une enveloppe de résultat versionnée contenant la provenance descriptive.
 //!
-//! Le contexte retourné n'est pas une attestation cryptographique. Le transport
-//! reste TCP non authentifié tant qu'une couche TLS/authentification dédiée n'est
-//! pas configurée dans une évolution ultérieure.
+//! Quand `FORGE_WORKER_TLS_CERT` et `FORGE_WORKER_TLS_KEY` sont définis, les
+//! connexions sont protégées par TLS standard via rustls. Sinon le worker reste
+//! en TCP non authentifié, destiné uniquement à la boucle locale ou à un réseau
+//! de confiance explicitement protégé.
+
+mod tls;
 
 use std::net::SocketAddr;
 use std::process::Command;
@@ -20,8 +23,10 @@ use forge_core::protocol::{
 };
 use forge_core::{fnv1a, Domain, Trial};
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpListener;
+
+use crate::tls::acceptor_from_env;
 
 enum WorkerDomain {
     LowRank(TensorTrainDomain),
@@ -167,9 +172,11 @@ fn worker_execution_context(domain: &str) -> WorkerExecutionContext {
     }
 }
 
-async fn read_frame<T: DeserializeOwned>(
-    socket: &mut TcpStream,
-) -> Result<T, Box<dyn std::error::Error>> {
+async fn read_frame<S, T>(socket: &mut S) -> Result<T, Box<dyn std::error::Error>>
+where
+    S: AsyncRead + Unpin,
+    T: DeserializeOwned,
+{
     let mut len_buf = [0u8; 4];
     socket.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
@@ -178,16 +185,16 @@ async fn read_frame<T: DeserializeOwned>(
             format!("Taille de frame invalide: {len} octets (limite {MAX_MESSAGE_BYTES})").into(),
         );
     }
-
     let mut payload = vec![0u8; len];
     socket.read_exact(&mut payload).await?;
     Ok(bincode::deserialize(&payload)?)
 }
 
-async fn write_frame<T: Serialize>(
-    socket: &mut TcpStream,
-    value: &T,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn write_frame<S, T>(socket: &mut S, value: &T) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: AsyncWrite + Unpin,
+    T: Serialize,
+{
     let payload = bincode::serialize(value)?;
     if payload.len() > MAX_MESSAGE_BYTES {
         return Err(format!(
@@ -217,12 +224,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::env::var("FORGE_WORKER_DOMAIN").unwrap_or_else(|_| "low_rank".to_string());
     let domain = init_domain(&domain_kind)
         .map_err(|e| format!("Initialisation domaine '{domain_kind}' échouée: {e}"))?;
-
     let context = worker_execution_context(domain.name());
+    let tls_acceptor = acceptor_from_env()?;
+
     tracing::info!(
         worker_id = %context.worker_id,
         hardware = %context.hardware,
         environment_fingerprint = %context.environment_fingerprint,
+        transport = if tls_acceptor.is_some() { "tls" } else { "tcp" },
         "[WORKER] contexte d'exécution"
     );
 
@@ -231,10 +240,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Impossible de binder sur {addr}: {e}"))?;
 
     tracing::info!(
-        "[WORKER] démon d'évaluation actif sur {} | domaine: {} | protocole: {}",
+        "[WORKER] démon d'évaluation actif sur {} | domaine: {} | protocole: {} | transport: {}",
         addr,
         domain.name(),
-        PROTOCOL_VERSION
+        PROTOCOL_VERSION,
+        if tls_acceptor.is_some() { "tls" } else { "tcp" }
     );
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
@@ -252,13 +262,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ = sigterm.recv() => tracing::info!("[WORKER] SIGTERM reçu"),
             }
         }
-
         #[cfg(not(unix))]
         {
             let _ = tokio::signal::ctrl_c().await;
             tracing::info!("[WORKER] Ctrl+C reçu");
         }
-
         let _ = shutdown_tx.send(());
     });
 
@@ -266,11 +274,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             conn = listener.accept() => {
                 match conn {
-                    Ok((mut socket, peer)) => {
+                    Ok((socket, peer)) => {
                         let domain = Arc::clone(&domain);
                         let context = context.clone();
+                        let tls_acceptor = tls_acceptor.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = handle_connection(domain, context, &mut socket).await {
+                            let result = if let Some(acceptor) = tls_acceptor {
+                                match acceptor.accept(socket).await {
+                                    Ok(mut tls_stream) => handle_connection(domain, context, &mut tls_stream).await,
+                                    Err(e) => Err(format!("Échec handshake TLS: {e}").into()),
+                                }
+                            } else {
+                                let mut socket = socket;
+                                handle_connection(domain, context, &mut socket).await
+                            };
+                            if let Err(e) = result {
                                 tracing::warn!("[WORKER] erreur traitement {peer}: {e}");
                             }
                         });
@@ -307,11 +325,14 @@ fn init_domain(kind: &str) -> Result<Arc<WorkerDomain>, Box<dyn std::error::Erro
     }
 }
 
-async fn handle_connection(
+async fn handle_connection<S>(
     domain: Arc<WorkerDomain>,
     context: WorkerExecutionContext,
-    socket: &mut TcpStream,
-) -> Result<(), Box<dyn std::error::Error>> {
+    socket: &mut S,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let payload: EvaluationPayload = read_frame(socket).await?;
 
     tracing::info!(
@@ -384,7 +405,6 @@ mod tests {
     async fn frame_roundtrip_accepts_large_payload() {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
-
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
             let payload: EvaluationPayload = read_frame(&mut socket).await.expect("read");
@@ -413,7 +433,6 @@ mod tests {
             .await
             .expect("write");
         });
-
         let client = tokio::task::spawn_blocking(move || {
             forge_core::protocol::dispatch_evaluation_to_worker(
                 &addr.to_string(),
@@ -430,7 +449,6 @@ mod tests {
         .await
         .expect("join")
         .expect("dispatch");
-
         assert_eq!(client.candidate_id, 12);
         server.await.expect("server");
     }
