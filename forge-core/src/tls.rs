@@ -18,19 +18,28 @@ pub(crate) fn parse_tls_endpoint(addr: &str) -> Result<Option<TlsEndpoint>> {
     let Some(rest) = addr.strip_prefix("tls://") else {
         return Ok(None);
     };
-    let (host, port) = rest.rsplit_once(':').ok_or_else(|| {
+    let (host_with_optional_brackets, port) = rest.rsplit_once(':').ok_or_else(|| {
         ForgeError::Evaluation(format!(
             "Adresse TLS worker invalide '{addr}': format attendu tls://host:port"
         ))
     })?;
+    let host = host_with_optional_brackets
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host_with_optional_brackets);
     if host.trim().is_empty() || port.parse::<u16>().is_err() {
         return Err(ForgeError::Evaluation(format!(
             "Adresse TLS worker invalide '{addr}': format attendu tls://host:port"
         )));
     }
+    let address = if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    };
     Ok(Some(TlsEndpoint {
         host: host.to_string(),
-        address: format!("{host}:{port}"),
+        address,
     }))
 }
 
@@ -71,7 +80,7 @@ pub(crate) fn connect_tls(
         ForgeError::Evaluation(format!("Nom TLS worker invalide '{}': {e}", endpoint.host))
     })?;
 
-    let socket_addr = endpoint
+    let socket_addrs = endpoint
         .address
         .to_socket_addrs()
         .map_err(|e| {
@@ -80,18 +89,32 @@ pub(crate) fn connect_tls(
                 endpoint.address
             ))
         })?
-        .next()
-        .ok_or_else(|| {
-            ForgeError::Evaluation(format!(
-                "Aucune adresse résolue pour le worker TLS '{}'",
-                endpoint.address
-            ))
-        })?;
-
-    let tcp = TcpStream::connect_timeout(&socket_addr, timeout).map_err(|e| {
-        ForgeError::Evaluation(format!(
-            "Connexion worker TLS perdue ({}): {e}",
+        .collect::<Vec<_>>();
+    if socket_addrs.is_empty() {
+        return Err(ForgeError::Evaluation(format!(
+            "Aucune adresse résolue pour le worker TLS '{}'",
             endpoint.address
+        )));
+    }
+
+    let mut last_error = None;
+    let mut tcp = None;
+    for socket_addr in socket_addrs {
+        match TcpStream::connect_timeout(&socket_addr, timeout) {
+            Ok(stream) => {
+                tcp = Some(stream);
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let tcp = tcp.ok_or_else(|| {
+        ForgeError::Evaluation(format!(
+            "Connexion worker TLS perdue ({}): {}",
+            endpoint.address,
+            last_error
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "aucune adresse joignable".into())
         ))
     })?;
     tcp.set_read_timeout(Some(timeout))
@@ -117,6 +140,15 @@ mod tests {
             .expect("tls endpoint");
         assert_eq!(endpoint.host, "worker.example");
         assert_eq!(endpoint.address, "worker.example:9443");
+    }
+
+    #[test]
+    fn bracketed_ipv6_is_normalized_for_tls_identity() {
+        let endpoint = parse_tls_endpoint("tls://[::1]:9443")
+            .unwrap()
+            .expect("tls endpoint");
+        assert_eq!(endpoint.host, "::1");
+        assert_eq!(endpoint.address, "[::1]:9443");
     }
 
     #[test]
