@@ -44,6 +44,7 @@ pub mod micro_mutator;
 pub mod mutation;
 pub mod protocol;
 pub mod registry;
+mod tls;
 mod trial;
 
 pub mod report_util;
