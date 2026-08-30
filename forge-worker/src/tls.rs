@@ -9,8 +9,7 @@ use tokio_rustls::TlsAcceptor;
 fn load_certs(path: &str) -> Result<Vec<CertificateDer<'static>>, Box<dyn std::error::Error>> {
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
-    let certs = rustls_pemfile::certs(&mut reader)
-        .collect::<Result<Vec<_>, _>>()?;
+    let certs = rustls_pemfile::certs(&mut reader).collect::<Result<Vec<_>, _>>()?;
     if certs.is_empty() {
         return Err(format!("Aucun certificat TLS trouvé dans '{path}'").into());
     }
