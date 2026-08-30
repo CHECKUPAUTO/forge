@@ -3,7 +3,7 @@ name = "forge-worker"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "Worker d'évaluation pour forge-core — écoute TCP, évalue les candidats avec isolation rlimit."
+description = "Worker d'évaluation pour forge-core — écoute TCP/TLS, évalue les candidats avec isolation rlimit."
 
 [[bin]]
 name = "forge-worker"
@@ -16,3 +16,6 @@ bincode = "1"
 serde = { version = "1", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+rustls = "0.23"
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
