@@ -18,11 +18,11 @@ use std::sync::Arc;
 use forge_core::domains::low_rank::{TensorCode, TensorTrainDomain};
 use forge_core::domains::simd_kernel::{SimdKernelCode, SimdKernelDomain};
 use forge_core::protocol::{
-    EvaluationPayload, EvaluationResult, WorkerExecutionContext, BENCHMARK_PROTOCOL,
-    MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
+    BENCHMARK_PROTOCOL, EvaluationPayload, EvaluationResult, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
+    WorkerExecutionContext,
 };
-use forge_core::{fnv1a, Domain, Trial};
-use serde::{de::DeserializeOwned, Serialize};
+use forge_core::{Domain, Trial, fnv1a};
+use serde::{Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -190,10 +190,7 @@ where
     Ok(bincode::deserialize(&payload)?)
 }
 
-async fn write_frame<S, T>(
-    socket: &mut S,
-    value: &T,
-) -> Result<(), Box<dyn std::error::Error>>
+async fn write_frame<S, T>(socket: &mut S, value: &T) -> Result<(), Box<dyn std::error::Error>>
 where
     S: AsyncWrite + Unpin,
     T: Serialize,
@@ -202,7 +199,8 @@ where
     if payload.len() > MAX_MESSAGE_BYTES {
         return Err(format!(
             "Réponse trop volumineuse: {} octets > limite {}",
-            payload.len(), MAX_MESSAGE_BYTES
+            payload.len(),
+            MAX_MESSAGE_BYTES
         )
         .into());
     }
@@ -246,7 +244,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         addr,
         domain.name(),
         PROTOCOL_VERSION,
-        if tls_acceptor.is_some() { "tls" } else { "tcp" }
+        if tls_acceptor.is_some() {
+            "tls"
+        } else {
+            "tcp"
+        }
     );
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
@@ -397,7 +399,10 @@ mod tests {
         assert!(!first.toolchain.is_empty());
         assert!(!first.os.is_empty());
         assert!(!first.arch.is_empty());
-        assert_eq!(first.environment_fingerprint, second.environment_fingerprint);
+        assert_eq!(
+            first.environment_fingerprint,
+            second.environment_fingerprint
+        );
     }
 
     #[tokio::test]
