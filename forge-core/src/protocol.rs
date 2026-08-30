@@ -58,7 +58,8 @@ fn write_frame<S: Write, T: Serialize>(stream: &mut S, value: &T) -> Result<()> 
     if bytes.len() > MAX_MESSAGE_BYTES {
         return Err(ForgeError::Evaluation(format!(
             "Message réseau trop volumineux: {} octets > limite {}",
-            bytes.len(), MAX_MESSAGE_BYTES
+            bytes.len(),
+            MAX_MESSAGE_BYTES
         )));
     }
     let len = u32::try_from(bytes.len()).map_err(|_| {
@@ -176,12 +177,12 @@ pub fn dispatch_evaluation_to_worker(
         let mut stream = TcpStream::connect_timeout(&socket_addr, timeout).map_err(|e| {
             ForgeError::Evaluation(format!("Connexion worker perdue ({addr}): {e}"))
         })?;
-        stream.set_read_timeout(Some(timeout)).map_err(|e| {
-            ForgeError::Evaluation(format!("Configuration timeout lecture: {e}"))
-        })?;
-        stream.set_write_timeout(Some(timeout)).map_err(|e| {
-            ForgeError::Evaluation(format!("Configuration timeout écriture: {e}"))
-        })?;
+        stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|e| ForgeError::Evaluation(format!("Configuration timeout lecture: {e}")))?;
+        stream
+            .set_write_timeout(Some(timeout))
+            .map_err(|e| ForgeError::Evaluation(format!("Configuration timeout écriture: {e}")))?;
         write_frame(&mut stream, payload)?;
         read_frame(&mut stream)?
     };
