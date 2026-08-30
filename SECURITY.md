@@ -14,24 +14,19 @@ Do not run arbitrary third-party candidate code directly on a production host me
 
 ## Master / Worker trust
 
-The current Master/Worker transport is a length-prefixed bincode protocol over TCP. Frames are bounded. The master rejects candidate-ID mismatches, source-hash mismatches, unsupported result-envelope versions, non-finite/empty valid objectives, unknown benchmark-protocol identifiers, and results without a declared execution context.
+The Master/Worker protocol is length-prefixed bincode with bounded frames. The master rejects candidate-ID mismatches, source-hash mismatches, unsupported result-envelope versions, non-finite/empty valid objectives, unknown benchmark-protocol identifiers, and results without a declared execution context.
 
-The worker result envelope records:
+The worker result envelope records the result protocol version, an independent FNV-1a hash of the exact source received, the domain actually used by the worker, the verify-then-measure benchmark protocol identifier, and the declared worker/toolchain/hardware execution context. This is **provenance binding, not cryptographic attestation**. FNV-1a is only a deterministic content identity/check and is not used as a signature or security primitive.
 
-- the result protocol version;
-- an independent FNV-1a hash of the exact source received;
-- the domain actually used by the worker;
-- the verify-then-measure benchmark protocol identifier;
-- worker identity, toolchain, OS, architecture, hardware description, and an environment fingerprint.
+### Authenticated TLS transport
 
-This is **provenance binding, not cryptographic attestation**. FNV-1a is used only as a deterministic content identity/check, not as a signature or security primitive.
+Worker addresses beginning with `tls://` use standard TLS through rustls. The master requires `FORGE_TLS_CA_CERT` and validates the worker certificate chain and the DNS name/SAN corresponding to the `tls://host:port` endpoint. A TLS worker is enabled by defining both `FORGE_WORKER_TLS_CERT` and `FORGE_WORKER_TLS_KEY` on the worker.
 
-The protocol still does **not** provide TLS, worker authentication, or cryptographic proof that the claimed execution occurred. Therefore:
+This authenticates the worker endpoint to the master according to the configured CA. It does **not** constitute cryptographic execution attestation: a correctly authenticated worker can still return dishonest or compromised measurements.
 
-- deploy workers only on a trusted network or behind an authenticated encrypted tunnel/VPN;
-- treat configured workers as trusted evaluators;
-- do not expose a Forge worker directly to an untrusted network;
-- do not interpret a remote worker score as cryptographic proof that the claimed execution occurred.
+Plain `host:port` worker addresses remain supported for compatibility and are **not authenticated or encrypted**. Restrict them to loopback, a trusted network, or an independently authenticated encrypted tunnel/VPN. Do not expose a plaintext Forge worker directly to an untrusted network.
+
+The current TLS mode authenticates the worker/server certificate; it does not yet require a client certificate from the master. Operators that require mutual endpoint authentication should additionally restrict worker network access until explicit mTLS support exists.
 
 ## Resource isolation
 
@@ -41,7 +36,7 @@ CUDA and other accelerator-backed domains also depend on the isolation and reset
 
 ## Measurement integrity
 
-Forge separates correctness verification from performance measurement. Remote workers now return an explicit execution-context fingerprint with every result so operators can retain the hardware/toolchain provenance of measurements.
+Forge separates correctness verification from performance measurement. Remote workers return an explicit execution-context fingerprint with every result so operators can retain the hardware/toolchain provenance of measurements.
 
 Persistent cache reuse is conservative: `EvaluationCache` does not return cached scores unless an explicit context identity is supplied through `FORGE_CACHE_ENV` or `with_environment_fingerprint`. This prevents the default configuration from silently reusing a benchmark score when the master cannot prove that the relevant hardware/toolchain/benchmark context is the same. Cache records remain scoped by domain, trial seed, candidate identity, Forge version, OS/architecture and the explicit environment identity.
 
