@@ -43,9 +43,7 @@ fn load_root_store(path: &str) -> Result<RootCertStore> {
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| ForgeError::Evaluation(format!("CA TLS PEM invalide '{path}': {e}")))?;
     if certs.is_empty() {
-        return Err(ForgeError::Evaluation(format!(
-            "CA TLS vide dans '{path}'"
-        )));
+        return Err(ForgeError::Evaluation(format!("CA TLS vide dans '{path}'")));
     }
 
     let mut roots = RootCertStore::empty();
@@ -62,9 +60,7 @@ pub(crate) fn connect_tls(
     timeout: Duration,
 ) -> Result<StreamOwned<ClientConnection, TcpStream>> {
     let ca_path = std::env::var("FORGE_TLS_CA_CERT").map_err(|_| {
-        ForgeError::Evaluation(
-            "FORGE_TLS_CA_CERT est requis pour une adresse worker tls://".into(),
-        )
+        ForgeError::Evaluation("FORGE_TLS_CA_CERT est requis pour une adresse worker tls://".into())
     })?;
     let roots = load_root_store(&ca_path)?;
     let config = ClientConfig::builder()
@@ -72,10 +68,7 @@ pub(crate) fn connect_tls(
         .with_no_client_auth();
 
     let server_name = ServerName::try_from(endpoint.host.clone()).map_err(|e| {
-        ForgeError::Evaluation(format!(
-            "Nom TLS worker invalide '{}': {e}",
-            endpoint.host
-        ))
+        ForgeError::Evaluation(format!("Nom TLS worker invalide '{}': {e}", endpoint.host))
     })?;
 
     let socket_addr = endpoint
@@ -101,12 +94,10 @@ pub(crate) fn connect_tls(
             endpoint.address
         ))
     })?;
-    tcp.set_read_timeout(Some(timeout)).map_err(|e| {
-        ForgeError::Evaluation(format!("Configuration timeout lecture TLS: {e}"))
-    })?;
-    tcp.set_write_timeout(Some(timeout)).map_err(|e| {
-        ForgeError::Evaluation(format!("Configuration timeout écriture TLS: {e}"))
-    })?;
+    tcp.set_read_timeout(Some(timeout))
+        .map_err(|e| ForgeError::Evaluation(format!("Configuration timeout lecture TLS: {e}")))?;
+    tcp.set_write_timeout(Some(timeout))
+        .map_err(|e| ForgeError::Evaluation(format!("Configuration timeout écriture TLS: {e}")))?;
 
     let connection = ClientConnection::new(Arc::new(config), server_name).map_err(|e| {
         ForgeError::Evaluation(format!("Initialisation client TLS impossible: {e}"))
