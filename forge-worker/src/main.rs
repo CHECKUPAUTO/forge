@@ -18,11 +18,11 @@ use std::sync::Arc;
 use forge_core::domains::low_rank::{TensorCode, TensorTrainDomain};
 use forge_core::domains::simd_kernel::{SimdKernelCode, SimdKernelDomain};
 use forge_core::protocol::{
-    BENCHMARK_PROTOCOL, EvaluationPayload, EvaluationResult, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
-    WorkerExecutionContext,
+    EvaluationPayload, EvaluationResult, WorkerExecutionContext, BENCHMARK_PROTOCOL,
+    MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
 };
-use forge_core::{Domain, Trial, fnv1a};
-use serde::{Serialize, de::DeserializeOwned};
+use forge_core::{fnv1a, Domain, Trial};
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -244,11 +244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         addr,
         domain.name(),
         PROTOCOL_VERSION,
-        if tls_acceptor.is_some() {
-            "tls"
-        } else {
-            "tcp"
-        }
+        if tls_acceptor.is_some() { "tls" } else { "tcp" }
     );
 
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
