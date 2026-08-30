@@ -2,10 +2,10 @@
 //! d'évaluation. Le transport utilise `bincode` avec un framing explicite :
 //! un entier u32 big-endian contenant la taille, suivi du payload sérialisé.
 //!
-//! Le résultat distant inclut une enveloppe de provenance descriptive liant le
-//! score à la source effectivement reçue, au domaine, au protocole de benchmark
-//! et au contexte d'exécution déclaré par le worker. Ce n'est pas une attestation
-//! cryptographique et cela ne remplace ni TLS ni l'authentification.
+//! Les adresses `tls://host:port` utilisent TLS avec validation de la chaîne et
+//! du nom du certificat worker via `FORGE_TLS_CA_CERT`. Les adresses historiques
+//! `host:port` restent TCP non authentifié et doivent être réservées à un réseau
+//! de confiance ou à la boucle locale.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -15,15 +15,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::candidate::{fnv1a, CandidateId};
 use crate::error::{ForgeError, Result};
+use crate::tls::{connect_tls, parse_tls_endpoint};
 
-/// Taille maximale d'un message Forge sur le réseau (code candidat inclus).
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
-/// Version explicite de l'enveloppe de résultat distribuée.
 pub const PROTOCOL_VERSION: u32 = 2;
-/// Identifiant du protocole de mesure Forge : vérification indépendante puis mesure.
 pub const BENCHMARK_PROTOCOL: &str = "forge.verify-then-measure.v1";
 
-/// Contexte d'exécution déclaré par un worker pour contextualiser un score.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct WorkerExecutionContext {
     pub worker_id: String,
@@ -34,51 +31,34 @@ pub struct WorkerExecutionContext {
     pub environment_fingerprint: String,
 }
 
-/// Paquet envoyé par le Master à un Worker pour demander l'évaluation
-/// d'un candidat. Cette forme reste stable pour préserver les appelants Rust.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EvaluationPayload {
-    /// Identifiant unique du candidat (hash d'identité du domaine).
     pub candidate_id: CandidateId,
-    /// Code source du candidat à compiler et exécuter.
     pub source_code: String,
-    /// Graine du trial pour reproductibilité.
     pub seed: u64,
-    /// Génération courante.
     pub generation: u64,
 }
 
-/// Réponse renvoyée par le Worker après évaluation.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct EvaluationResult {
-    /// Version de l'enveloppe de provenance.
     pub protocol_version: u32,
-    /// Identifiant du candidat évalué.
     pub candidate_id: CandidateId,
-    /// Hash indépendant de la source effectivement reçue.
     pub source_hash: u64,
-    /// Domaine effectivement utilisé par le worker.
     pub domain: String,
-    /// Protocole de benchmark appliqué.
     pub benchmark_protocol: String,
-    /// Contexte d'exécution déclaré du worker.
     pub execution_context: WorkerExecutionContext,
-    /// Le candidat a-t-il passé la porte de vérification ?
     pub is_valid: bool,
-    /// Objectifs mesurés (vide si invalide).
     pub objectives: Vec<f64>,
-    /// Message d'erreur en cas d'échec de compilation ou de crash.
     pub error_message: Option<String>,
 }
 
-fn write_frame<T: Serialize>(stream: &mut TcpStream, value: &T) -> Result<()> {
+fn write_frame<S: Write, T: Serialize>(stream: &mut S, value: &T) -> Result<()> {
     let bytes = bincode::serialize(value)
         .map_err(|e| ForgeError::Evaluation(format!("Échec sérialisation bincode: {e}")))?;
     if bytes.len() > MAX_MESSAGE_BYTES {
         return Err(ForgeError::Evaluation(format!(
             "Message réseau trop volumineux: {} octets > limite {}",
-            bytes.len(),
-            MAX_MESSAGE_BYTES
+            bytes.len(), MAX_MESSAGE_BYTES
         )));
     }
     let len = u32::try_from(bytes.len()).map_err(|_| {
@@ -96,7 +76,7 @@ fn write_frame<T: Serialize>(stream: &mut TcpStream, value: &T) -> Result<()> {
     Ok(())
 }
 
-fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut TcpStream) -> Result<T> {
+fn read_frame<S: Read, T: for<'de> Deserialize<'de>>(stream: &mut S) -> Result<T> {
     let mut len_buf = [0u8; 4];
     stream
         .read_exact(&mut len_buf)
@@ -115,38 +95,11 @@ fn read_frame<T: for<'de> Deserialize<'de>>(stream: &mut TcpStream) -> Result<T>
         .map_err(|e| ForgeError::Evaluation(format!("Payload corrompu du worker: {e}")))
 }
 
-/// Envoie un [`EvaluationPayload`] à un Worker distant et récupère le
-/// [`EvaluationResult`]. Le résultat n'est accepté que si le worker confirme
-/// exactement le domaine attendu par le master.
-pub fn dispatch_evaluation_to_worker(
-    addr: &str,
+fn validate_result(
+    result: &EvaluationResult,
     payload: &EvaluationPayload,
     expected_domain: &str,
-    timeout: Duration,
-) -> Result<EvaluationResult> {
-    if expected_domain.trim().is_empty() {
-        return Err(ForgeError::Evaluation(
-            "Domaine attendu vide pour l'évaluation distribuée".into(),
-        ));
-    }
-
-    let socket_addr: SocketAddr = addr
-        .parse()
-        .map_err(|e| ForgeError::Evaluation(format!("Adresse worker invalide '{addr}': {e}")))?;
-
-    let mut stream = TcpStream::connect_timeout(&socket_addr, timeout)
-        .map_err(|e| ForgeError::Evaluation(format!("Connexion worker perdue ({addr}): {e}")))?;
-
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|e| ForgeError::Evaluation(format!("Configuration timeout lecture: {e}")))?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(|e| ForgeError::Evaluation(format!("Configuration timeout écriture: {e}")))?;
-
-    write_frame(&mut stream, payload)?;
-    let result: EvaluationResult = read_frame(&mut stream)?;
-
+) -> Result<()> {
     if result.protocol_version != PROTOCOL_VERSION {
         return Err(ForgeError::Evaluation(format!(
             "Réponse worker de version incompatible: {} attendu={PROTOCOL_VERSION}",
@@ -197,7 +150,43 @@ pub fn dispatch_evaluation_to_worker(
             "Réponse worker invalide: score déclaré valide mais objectifs absents/non finis".into(),
         ));
     }
+    Ok(())
+}
 
+pub fn dispatch_evaluation_to_worker(
+    addr: &str,
+    payload: &EvaluationPayload,
+    expected_domain: &str,
+    timeout: Duration,
+) -> Result<EvaluationResult> {
+    if expected_domain.trim().is_empty() {
+        return Err(ForgeError::Evaluation(
+            "Domaine attendu vide pour l'évaluation distribuée".into(),
+        ));
+    }
+
+    let result: EvaluationResult = if let Some(endpoint) = parse_tls_endpoint(addr)? {
+        let mut stream = connect_tls(&endpoint, timeout)?;
+        write_frame(&mut stream, payload)?;
+        read_frame(&mut stream)?
+    } else {
+        let socket_addr: SocketAddr = addr.parse().map_err(|e| {
+            ForgeError::Evaluation(format!("Adresse worker invalide '{addr}': {e}"))
+        })?;
+        let mut stream = TcpStream::connect_timeout(&socket_addr, timeout).map_err(|e| {
+            ForgeError::Evaluation(format!("Connexion worker perdue ({addr}): {e}"))
+        })?;
+        stream.set_read_timeout(Some(timeout)).map_err(|e| {
+            ForgeError::Evaluation(format!("Configuration timeout lecture: {e}"))
+        })?;
+        stream.set_write_timeout(Some(timeout)).map_err(|e| {
+            ForgeError::Evaluation(format!("Configuration timeout écriture: {e}"))
+        })?;
+        write_frame(&mut stream, payload)?;
+        read_frame(&mut stream)?
+    };
+
+    validate_result(&result, payload, expected_domain)?;
     Ok(result)
 }
 
@@ -215,6 +204,20 @@ mod tests {
             arch: "test-arch".into(),
             hardware: "test-cpu".into(),
             environment_fingerprint: "env-123".into(),
+        }
+    }
+
+    fn result_for(payload: &EvaluationPayload, domain: &str) -> EvaluationResult {
+        EvaluationResult {
+            protocol_version: PROTOCOL_VERSION,
+            candidate_id: payload.candidate_id,
+            source_hash: fnv1a(&payload.source_code),
+            domain: domain.into(),
+            benchmark_protocol: BENCHMARK_PROTOCOL.into(),
+            execution_context: context(),
+            is_valid: true,
+            objectives: vec![42.0],
+            error_message: None,
         }
     }
 
@@ -236,21 +239,17 @@ mod tests {
 
     #[test]
     fn test_result_bincode_roundtrip() {
-        let res = EvaluationResult {
-            protocol_version: PROTOCOL_VERSION,
+        let payload = EvaluationPayload {
             candidate_id: 12345,
-            source_hash: 99,
-            domain: "test".into(),
-            benchmark_protocol: BENCHMARK_PROTOCOL.into(),
-            execution_context: context(),
-            is_valid: true,
-            objectives: vec![1.5, 2.7, 3.9],
-            error_message: None,
+            source_code: "source".into(),
+            seed: 1,
+            generation: 2,
         };
+        let res = result_for(&payload, "test");
         let bytes = bincode::serialize(&res).expect("sérialisation");
         let recovered: EvaluationResult = bincode::deserialize(&bytes).expect("désérialisation");
         assert_eq!(recovered.execution_context, context());
-        assert_eq!(recovered.objectives, vec![1.5, 2.7, 3.9]);
+        assert_eq!(recovered.objectives, vec![42.0]);
     }
 
     #[test]
@@ -261,9 +260,13 @@ mod tests {
             seed: 0,
             generation: 0,
         };
-        let result =
-            dispatch_evaluation_to_worker("invalid-addr", &payload, "test", Duration::from_secs(1));
-        assert!(result.is_err());
+        assert!(dispatch_evaluation_to_worker(
+            "invalid-addr",
+            &payload,
+            "test",
+            Duration::from_secs(1)
+        )
+        .is_err());
     }
 
     #[test]
@@ -273,20 +276,8 @@ mod tests {
         let worker = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
             let payload: EvaluationPayload = read_frame(&mut stream).expect("read request");
-            let result = EvaluationResult {
-                protocol_version: PROTOCOL_VERSION,
-                candidate_id: payload.candidate_id,
-                source_hash: fnv1a(&payload.source_code),
-                domain: "test".into(),
-                benchmark_protocol: BENCHMARK_PROTOCOL.into(),
-                execution_context: context(),
-                is_valid: true,
-                objectives: vec![42.0],
-                error_message: None,
-            };
-            write_frame(&mut stream, &result).expect("write response");
+            write_frame(&mut stream, &result_for(&payload, "test")).expect("write response");
         });
-
         let payload = EvaluationPayload {
             candidate_id: 77,
             source_code: "x".repeat(128 * 1024),
@@ -300,118 +291,45 @@ mod tests {
             Duration::from_secs(2),
         )
         .expect("dispatch");
-        assert_eq!(result.candidate_id, 77);
         assert_eq!(result.objectives, vec![42.0]);
         worker.join().expect("worker thread");
     }
 
     #[test]
     fn dispatch_rejects_wrong_source_hash() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let payload: EvaluationPayload = read_frame(&mut stream).expect("read request");
-            let result = EvaluationResult {
-                protocol_version: PROTOCOL_VERSION,
-                candidate_id: payload.candidate_id,
-                source_hash: 0,
-                domain: "test".into(),
-                benchmark_protocol: BENCHMARK_PROTOCOL.into(),
-                execution_context: context(),
-                is_valid: true,
-                objectives: vec![1.0],
-                error_message: None,
-            };
-            write_frame(&mut stream, &result).expect("write response");
-        });
         let payload = EvaluationPayload {
             candidate_id: 5,
             source_code: "actual-source".into(),
             seed: 1,
             generation: 1,
         };
-        assert!(dispatch_evaluation_to_worker(
-            &addr.to_string(),
-            &payload,
-            "test",
-            Duration::from_secs(2)
-        )
-        .is_err());
-        worker.join().expect("worker thread");
+        let mut result = result_for(&payload, "test");
+        result.source_hash = 0;
+        assert!(validate_result(&result, &payload, "test").is_err());
     }
 
     #[test]
     fn dispatch_rejects_wrong_domain() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let payload: EvaluationPayload = read_frame(&mut stream).expect("read request");
-            let result = EvaluationResult {
-                protocol_version: PROTOCOL_VERSION,
-                candidate_id: payload.candidate_id,
-                source_hash: fnv1a(&payload.source_code),
-                domain: "wrong-domain".into(),
-                benchmark_protocol: BENCHMARK_PROTOCOL.into(),
-                execution_context: context(),
-                is_valid: true,
-                objectives: vec![1.0],
-                error_message: None,
-            };
-            write_frame(&mut stream, &result).expect("write response");
-        });
         let payload = EvaluationPayload {
             candidate_id: 6,
             source_code: "actual-source".into(),
             seed: 1,
             generation: 1,
         };
-        assert!(dispatch_evaluation_to_worker(
-            &addr.to_string(),
-            &payload,
-            "expected-domain",
-            Duration::from_secs(2)
-        )
-        .is_err());
-        worker.join().expect("worker thread");
+        let result = result_for(&payload, "wrong-domain");
+        assert!(validate_result(&result, &payload, "expected-domain").is_err());
     }
 
     #[test]
     fn dispatch_rejects_incomplete_execution_context() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept");
-            let payload: EvaluationPayload = read_frame(&mut stream).expect("read request");
-            let mut incomplete_context = context();
-            incomplete_context.worker_id.clear();
-            let result = EvaluationResult {
-                protocol_version: PROTOCOL_VERSION,
-                candidate_id: payload.candidate_id,
-                source_hash: fnv1a(&payload.source_code),
-                domain: "test".into(),
-                benchmark_protocol: BENCHMARK_PROTOCOL.into(),
-                execution_context: incomplete_context,
-                is_valid: true,
-                objectives: vec![1.0],
-                error_message: None,
-            };
-            write_frame(&mut stream, &result).expect("write response");
-        });
         let payload = EvaluationPayload {
             candidate_id: 7,
             source_code: "actual-source".into(),
             seed: 1,
             generation: 1,
         };
-        assert!(dispatch_evaluation_to_worker(
-            &addr.to_string(),
-            &payload,
-            "test",
-            Duration::from_secs(2)
-        )
-        .is_err());
-        worker.join().expect("worker thread");
+        let mut result = result_for(&payload, "test");
+        result.execution_context.worker_id.clear();
+        assert!(validate_result(&result, &payload, "test").is_err());
     }
 }
