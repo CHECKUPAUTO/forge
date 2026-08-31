@@ -60,17 +60,38 @@ initial_vertical_slice:
     - measurement_evidence_separate_from_verification
     - no_candidate_selection_when_verification_fails
 
+phase_evidence:
+  KA0:
+    forge_main_commit: 01587804d9e321bc89c606b4215850cb202a907f
+    pull_request: 9
+    exact_head_ci: a84573f5f72429346ca710a5c6e43024f46d6992
+    gates:
+      - cargo_fmt
+      - cargo_check_workspace_all_targets
+      - cargo_clippy_workspace_all_targets_deny_warnings
+      - cargo_test_workspace_all_targets
+      - cargo_test_forge_core_bandit
+      - cargo_clippy_forge_core_llm_bandit
+    result: passed
+  KA1_surface_audit:
+    nnis_main_commit: a4635547f3e46abd6652f8d319093dabc0baee6f
+    finding: >-
+      Existing public nnis-jit exports provide JitCompiler, CompileOptions,
+      CompiledCode, Module, Kernel, KernelLaunch and launch configuration; nnis-rt
+      exports Context, Stream, Event and DeviceBuffer. No new NNIS CUDA API is
+      required for the first adapter slice.
+
 phases:
   - id: KA0
     name: Versioned generic kernel-agent contract
-    status: active
+    status: completed
     goals:
       - add_forge_kernel_agent_workspace_crate
       - define_task_candidate_numerical_verification_measurement_and_backend_contracts
       - add_unit_tests_for_fail_closed_verification_and_comparability
   - id: KA1
     name: NNIS backend adapter
-    status: next
+    status: active
     goals:
       - compile_candidate_source_through_NNIS_NVRTC
       - execute_through_NNIS_runtime_without_PyTorch
