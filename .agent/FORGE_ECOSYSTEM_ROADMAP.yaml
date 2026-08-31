@@ -1,0 +1,191 @@
+schema_version: 1
+kind: forge_ecosystem_agent_roadmap
+status: active
+last_updated: "2026-08-31"
+repository: Memorithm/forge
+intended_consumer: autonomous_coding_agent
+merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
+
+mission:
+  primary: >-
+    Preserve Forge as an execution-driven evolutionary algorithm-search engine:
+    propose or mutate candidates, compile them, verify correctness independently,
+    measure real execution, and select survivors from executed evidence.
+  ecosystem_goal: >-
+    Become the reusable search/optimization engine for SciRust, ElasticXxx,
+    FLAT-ATTENTION, NNIS and other Memorithm products without absorbing their
+    domain semantics or becoming a generic orchestration service.
+
+verified_current_facts:
+  - forge_core_contains_evolutionary_search_Pareto_holdout_cache_checkpoints_and_distributed_protocol_logic
+  - forge_worker_provides_remote_candidate_evaluation
+  - forge_bridge_is_a_typed_Rust_facade_not_an_HTTP_service
+  - existing_domains_include_simd_gemm_cuda_gemm_and_low_rank_compression
+  - verify_is_separate_from_measure_in_the_Domain_contract
+  - the_current_distributed_protocol_is_not_a_security_protocol_and_requires_a_trusted_boundary
+  - generated_code_resource_limits_are_defense_in_depth_not_a_complete_hostile_code_sandbox
+  - LLM_mutation_is_optional_and_executed_evidence_not_the_LLM_is_authoritative
+
+invariants:
+  - executed_correctness_evidence_precedes_performance_selection
+  - no_candidate_survives_if_verification_fails_or_is_missing
+  - no_fabricated_performance_or_scientific_novelty
+  - holdout_and_test_oracles_must_not_be_leaked_into_candidate_generation
+  - contextual_cache_keys_must_capture_relevant_environment_and_problem_identity
+  - remote_worker_results_are_untrusted_beyond_the_declared_trust_model_until_authenticated_or_attested
+  - hostile_generated_code_requires_an_external_isolation_boundary_until_a_real_sandbox_contract_exists
+  - Forge_does_not_become_the_global_ecosystem_control_plane
+  - required_CI_must_be_green_on_exact_PR_head_before_merge
+
+ownership:
+  role: execution_driven_candidate_search_and_selection_engine
+  owns:
+    - candidate_generation_and_mutation_strategy
+    - evolutionary_selection_and_Pareto_logic
+    - holdout_policy_and_candidate_search_state
+    - domain_verify_then_measure_execution_contract
+    - search_checkpoints_contextual_cache_and_campaign_reproducibility
+    - worker_protocol_for_distributed_candidate_evaluation
+    - optional_LLM_and_bandit_mutation_strategy
+  does_not_own:
+    - SciRust_scientific_or_tensor_semantics
+    - ElasticXxx_runtime_actuation_or_resource_policy
+    - FLAT_ATTENTION_attention_correctness_or_kernel_public_contract
+    - NNIS_model_runtime_kernel_or_representation_semantics
+    - SLHAv2_KV_quality_or_tile_semantics
+    - SciRust_Hub_registry_or_workflow_control_plane
+    - SciRust_Verify_evidence_dossier_verdict_semantics
+    - SciCapsule_trust_or_execution_product_semantics
+
+control_loop:
+  - RECEIVE_DOMAIN_CONTRACT_AND_OBJECTIVE
+  - GENERATE_OR_MUTATE_CANDIDATE
+  - COMPILE_OR_MATERIALIZE_CANDIDATE
+  - VERIFY_IN_INDEPENDENT_HARNESS
+  - REJECT_ON_ANY_CORRECTNESS_FAILURE
+  - MEASURE_REAL_EXECUTION
+  - NORMALIZE_CONTEXT_AND_EVIDENCE
+  - SELECT_SURVIVORS
+  - CHECKPOINT_CAMPAIGN
+  - EXPORT_QUALIFIED_CANDIDATE_AND_PROVENANCE
+
+ecosystem_interfaces:
+  Memorithm/scirust:
+    relationship: provider_of_candidate_domains_or_independent_oracles
+    status: planned_versioned_domain_contracts
+    rule: SciRust_scientific_correctness_remains_owned_by_SciRust
+  Memorithm/ElasticXxx:
+    relationship: objective_invariant_and_runtime_plan_partner
+    status: planned_versioned_bridge
+    desired_contract:
+      - ElasticXxx_supplies_admissible_candidate_envelope_hard_invariants_and_objective
+      - Forge_returns_verified_candidates_measurements_and_search_provenance
+      - ElasticXxx_revalidates_before_runtime_actuation_or_promotion
+  Memorithm/FLAT-ATTENTION:
+    relationship: attention_kernel_candidate_domain
+    status: planned_not_assumed
+    rule: FLAT_scalar_oracle_and_numerical_policy_gate_every_candidate
+  Memorithm/NVIDIA-Native-Inference-Stack:
+    relationship: kernel_or_representation_candidate_domain
+    status: planned_not_assumed
+    rule: NNIS_end_to_end_correctness_and_environment_fingerprint_gate_promotion
+  Memorithm/SLHAv2:
+    relationship: optional_codec_scoring_or_cache_policy_candidate_domains
+    status: planned_not_assumed
+    rule: real_model_quality_and_KV_semantics_gate_promotion
+  Memorithm/SciRust-Verify:
+    relationship: evidence_normalization_and_integrity_layer
+    status: planned
+    desired_contract:
+      - export_campaign_candidate_verify_measure_and_selection_evidence
+      - preserve_the_difference_between_search_score_and_verified_claim
+  Memorithm/scirust-hub:
+    relationship: orchestration_control_plane
+    status: planned
+    desired_contract:
+      - Hub_may_orchestrate_Forge_campaigns_or_workers_as_components
+      - Forge_does_not_reimplement_Hub_registry_workflow_or_artifact_control_plane
+  Memorithm/SciCapsule:
+    relationship: optional_packaging_for_reproducible_candidate_or_harness_inputs
+    status: planned_not_assumed
+
+roadmap:
+  - id: FG0
+    name: Baseline architecture and threat-model audit
+    status: active
+    goals:
+      - audit_forge_core_worker_bridge_domains_cache_checkpoints_bandit_and_LLM_paths
+      - verify_current_security_and_resource_limit_boundaries
+      - inventory_all_places_where_candidate_identity_environment_or_holdout_data_can_leak
+  - id: FG1
+    name: Worker trust and result integrity
+    status: active_priority
+    goals:
+      - version_worker_identity_and_capability_descriptor
+      - add_authenticated_transport_or_explicit_authentication_layer
+      - bind_returned_result_to_candidate_domain_trial_and_environment_identity
+      - reject_duplicate_replayed_or_mismatched_results_fail_closed
+      - leave_full_cryptographic_attestation_as_a_separate_evidence_backed_step
+  - id: FG2
+    name: Candidate isolation contract
+    status: active_priority
+    goals:
+      - define_a_sandbox_runner_interface_without_claiming_current_process_limits_are_a_sandbox
+      - provide_reference_external_isolation_profiles_for_generated_code
+      - bound_filesystem_network_CPU_memory_process_and_wall_clock_capabilities_when_backend_supports_it
+      - fail_closed_when_a_campaign_requires_isolation_that_is_unavailable
+  - id: FG3
+    name: Reproducible evaluation evidence
+    status: active
+    goals:
+      - strengthen_environment_fingerprint_and_cache_context
+      - record_exact_candidate_source_compiler_flags_harness_oracle_and_measurement_protocol
+      - make_checkpoint_resume_preserve_trial_identity_and_holdout_separation
+      - integrate_with_SciRust_Verify_without_reimplementing_dossier_semantics
+  - id: FG4
+    name: Versioned ecosystem domain SDK
+    status: planned_after_FG1_FG3
+    goals:
+      - make_domain_plugin_contract_easy_to_consume_from_other_Rust_repositories
+      - separate_candidate_generation_representation_verify_measure_and_objective_surfaces
+      - provide_adapters_for_SciRust_ElasticXxx_FLAT_NNIS_and_SLHAv2_only_when_real_contracts_exist
+  - id: FG5
+    name: Elastic search bridge
+    status: planned
+    goals:
+      - accept_ElasticXxx_invariants_and_objective_as_hard_campaign_constraints
+      - return_multiple_Pareto_candidates_with_evidence_not_only_one_winner
+      - prevent_search_from_actuating_runtime_resources_directly
+  - id: FG6
+    name: Distributed campaign robustness
+    status: planned
+    goals:
+      - worker_liveness_and_lease_semantics
+      - deterministic_duplicate_and_retry_handling
+      - bounded_parallel_dispatch
+      - resumable_campaigns_without_double_counting_measurements
+      - Hub_integration_only_after_contracts_are_published
+  - id: FG7
+    name: Productization
+    status: long_term
+    goals:
+      - stable_domain_and_bridge_APIs
+      - documented_trust_and_isolation_requirements
+      - reproducible_reference_campaigns
+      - semver_MSRV_and_compatibility_policy
+
+agent_operating_protocol:
+  must_read_this_file:
+    - at_start_of_every_agent_session
+    - before_selecting_a_new_security_distributed_or_domain_integration_phase
+    - before_cross_repository_domain_work
+    - before_candidate_promotion_or_merge_decisions
+  must_update_this_file:
+    - candidate_or_strategy_promotion_rejection_that_changes_search_policy
+    - security_or_trust_model_change
+    - cross_repository_contract_change
+    - roadmap_phase_change
+  fail_closed: >-
+    If this roadmap cannot be read, do not make major search-policy, security,
+    cross-repository integration, candidate-promotion, or merge decisions.
+    Read-only diagnosis is allowed.
