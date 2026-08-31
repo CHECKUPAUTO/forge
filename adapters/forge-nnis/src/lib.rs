@@ -10,7 +10,10 @@ use forge_kernel_agent::{
     KernelTask, MeasurementEvidence, VerificationEvidence, MEASUREMENT_EVIDENCE_SCHEMA_VERSION,
 };
 use nnis_bench::{benchmark_gpu, BenchConfig, BenchmarkCase, BenchmarkMetadata};
-use nnis_jit::{CompileOptions, CompiledCode, JitCompiler, Kernel, KernelArgs, KernelLaunch, LaunchConfig, Module};
+use nnis_jit::{
+    CompileOptions, CompiledCode, JitCompiler, Kernel, KernelArgs, KernelLaunch, LaunchConfig,
+    Module,
+};
 use nnis_rt::{gpu_context, Context, DeviceBuffer, NnisError, Stream};
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -99,11 +102,9 @@ impl NnisAxpbyBackend {
                 "axpby task requires exactly one dimension: elements".to_string(),
             ));
         }
-        let elements = task
-            .dimensions
-            .get("elements")
-            .copied()
-            .ok_or_else(|| NnisBackendError::InvalidTask("missing elements dimension".to_string()))?;
+        let elements = task.dimensions.get("elements").copied().ok_or_else(|| {
+            NnisBackendError::InvalidTask("missing elements dimension".to_string())
+        })?;
         if elements == 0 || elements > i32::MAX as u64 {
             return Err(NnisBackendError::InvalidTask(format!(
                 "elements must be in 1..={}, got {elements}",
@@ -227,7 +228,8 @@ impl KernelBackend for NnisAxpbyBackend {
                     continue;
                 }
                 let abs_error = f64::from((observed - expected).abs());
-                let rel_error = abs_error / f64::from(expected.abs()).max(f64::from(f32::MIN_POSITIVE));
+                let rel_error =
+                    abs_error / f64::from(expected.abs()).max(f64::from(f32::MIN_POSITIVE));
                 max_abs_error = max_abs_error.max(abs_error);
                 max_rel_error = max_rel_error.max(rel_error);
                 let allowed = task.numerical.atol + task.numerical.rtol * f64::from(expected.abs());
@@ -283,17 +285,11 @@ impl KernelBackend for NnisAxpbyBackend {
             .with_work_items(elements as u64)
             .with_bytes_per_iteration(bytes_per_iteration);
 
-        let report = benchmark_gpu(
-            &self.context,
-            &self.stream,
-            case,
-            self.bench_config,
-            || {
-                // SAFETY: fixed ABI and stable argument pack; benchmark_gpu
-                // drains/synchronizes the stream around all measured launches.
-                unsafe { launch.launch(&mut arguments) }
-            },
-        )?;
+        let report = benchmark_gpu(&self.context, &self.stream, case, self.bench_config, || {
+            // SAFETY: fixed ABI and stable argument pack; benchmark_gpu
+            // drains/synchronizes the stream around all measured launches.
+            unsafe { launch.launch(&mut arguments) }
+        })?;
 
         // Self-comparison intentionally exercises NNIS's fail-closed completeness
         // gate. A missing run context, GPU UUID, driver/NVRTC version, host
@@ -353,7 +349,8 @@ fn compatible_environment_id(metadata: &BenchmarkMetadata) -> Result<String, Nni
 }
 
 fn verification_inputs(elements: usize, trial: u32) -> (Vec<f32>, Vec<f32>) {
-    let mut state = 0xD1B5_4A32_D192_ED03_u64 ^ u64::from(trial).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut state =
+        0xD1B5_4A32_D192_ED03_u64 ^ u64::from(trial).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let mut left = Vec::with_capacity(elements);
     let mut right = Vec::with_capacity(elements);
     for _ in 0..elements {
@@ -424,7 +421,10 @@ mod tests {
 
     #[test]
     fn task_gate_accepts_only_initial_strict_f32_contract() {
-        assert_eq!(NnisAxpbyBackend::validate_task(&strict_task()).unwrap(), 1024);
+        assert_eq!(
+            NnisAxpbyBackend::validate_task(&strict_task()).unwrap(),
+            1024
+        );
         let mut tf32 = strict_task();
         tf32.numerical.allow_tf32 = true;
         assert!(NnisAxpbyBackend::validate_task(&tf32).is_err());
@@ -441,7 +441,11 @@ mod tests {
         let other = verification_inputs(64, 8);
         assert_eq!(first, replay);
         assert_ne!(first, other);
-        assert!(first.0.iter().chain(&first.1).all(|value| value.is_finite()));
+        assert!(first
+            .0
+            .iter()
+            .chain(&first.1)
+            .all(|value| value.is_finite()));
     }
 
     #[test]
