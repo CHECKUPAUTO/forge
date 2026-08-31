@@ -67,8 +67,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     )
     .with_dimension("elements", elements);
 
-    let backend = NnisAxpbyBackend::first()?
-        .with_bench_config(BenchConfig::new(warmups, iterations))?;
+    let backend =
+        NnisAxpbyBackend::first()?.with_bench_config(BenchConfig::new(warmups, iterations))?;
 
     let wrong = KernelCandidate::new(KernelSourceLanguage::CudaCpp, WRONG_CANDIDATE);
     let wrong_evaluation = evaluate_candidate(&backend, &task, &wrong)?;
