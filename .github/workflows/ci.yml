@@ -29,3 +29,11 @@ jobs:
         run: cargo test -p forge-core --lib --features bandit
       - name: Clippy LLM + bandit paths
         run: cargo clippy -p forge-core --all-targets --features bandit -- -D warnings
+      - name: Format NNIS adapter
+        run: cargo fmt --manifest-path adapters/forge-nnis/Cargo.toml --all -- --check
+      - name: Check NNIS adapter
+        run: cargo check --manifest-path adapters/forge-nnis/Cargo.toml --all-targets
+      - name: Clippy NNIS adapter
+        run: cargo clippy --manifest-path adapters/forge-nnis/Cargo.toml --all-targets -- -D warnings
+      - name: Test NNIS adapter host gates
+        run: cargo test --manifest-path adapters/forge-nnis/Cargo.toml --all-targets
