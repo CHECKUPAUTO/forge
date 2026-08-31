@@ -6,7 +6,7 @@
 //! is followed by independent verification, and measurement is only invoked
 //! after verification passes.
 
-use forge_core::candidate::{fnv1a, Candidate, CandidateId};
+use forge_core::{fnv1a, Candidate, CandidateId};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
