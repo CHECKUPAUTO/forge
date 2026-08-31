@@ -1,0 +1,17 @@
+[package]
+name = "forge-nnis"
+version = "0.1.0"
+edition = "2021"
+license = "LicenseRef-CheckupAuto-Dual"
+description = "NNIS execution backend for Forge kernel-agent campaigns"
+publish = false
+
+[workspace]
+resolver = "2"
+
+[dependencies]
+forge-kernel-agent = { path = "../../forge-kernel-agent" }
+nnis-bench = { git = "https://github.com/Memorithm/NNIS.git", rev = "a4635547f3e46abd6652f8d319093dabc0baee6f", package = "nnis-bench" }
+nnis-jit = { git = "https://github.com/Memorithm/NNIS.git", rev = "a4635547f3e46abd6652f8d319093dabc0baee6f", package = "nnis-jit" }
+nnis-rt = { git = "https://github.com/Memorithm/NNIS.git", rev = "a4635547f3e46abd6652f8d319093dabc0baee6f", package = "nnis-rt" }
+serde_json = "1"
