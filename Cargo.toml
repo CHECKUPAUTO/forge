@@ -6,6 +6,7 @@ members = [
     "forge-cli",
     "forge-domains",
     "forge-worker",
+    "forge-kernel-agent",
 ]
 resolver = "2"
 
