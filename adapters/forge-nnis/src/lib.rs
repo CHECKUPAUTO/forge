@@ -40,6 +40,15 @@ impl NnisArtifact {
     }
 }
 
+struct AxpbyInvocation<'a> {
+    left: &'a DeviceBuffer<f32>,
+    right: &'a DeviceBuffer<f32>,
+    output: &'a DeviceBuffer<f32>,
+    alpha: f32,
+    beta: f32,
+    elements: usize,
+}
+
 pub struct NnisAxpbyBackend {
     context: Arc<Context>,
     stream: Stream,
@@ -135,23 +144,18 @@ impl NnisAxpbyBackend {
     fn enqueue_axpby(
         &self,
         kernel: &Kernel,
-        left: &DeviceBuffer<f32>,
-        right: &DeviceBuffer<f32>,
-        output: &DeviceBuffer<f32>,
-        alpha: f32,
-        beta: f32,
-        elements: usize,
+        invocation: AxpbyInvocation<'_>,
     ) -> Result<(), NnisBackendError> {
-        let config = LaunchConfig::for_num_elements(elements, self.block_size)?;
+        let config = LaunchConfig::for_num_elements(invocation.elements, self.block_size)?;
         let launch = KernelLaunch::new(kernel, &self.stream, config);
         let mut arguments = KernelArgs::with_capacity(6, 3);
         arguments
-            .push_buffer(left)
-            .push_buffer(right)
-            .push_buffer(output)
-            .push(alpha)
-            .push(beta)
-            .push(elements as i32);
+            .push_buffer(invocation.left)
+            .push_buffer(invocation.right)
+            .push_buffer(invocation.output)
+            .push(invocation.alpha)
+            .push(invocation.beta)
+            .push(invocation.elements as i32);
         // SAFETY: the fixed AXPBY ABI is part of this backend contract. The
         // argument order and widths above exactly match `AXPBY_ENTRYPOINT`, and
         // all buffers/kernel/stream outlive synchronization by the caller.
@@ -215,7 +219,17 @@ impl KernelBackend for NnisAxpbyBackend {
             let right = DeviceBuffer::from_host(&self.context, &self.stream, &right_host)?;
             let output = DeviceBuffer::<f32>::new(&self.context, elements)?;
 
-            self.enqueue_axpby(&kernel, &left, &right, &output, alpha, beta, elements)?;
+            self.enqueue_axpby(
+                &kernel,
+                AxpbyInvocation {
+                    left: &left,
+                    right: &right,
+                    output: &output,
+                    alpha,
+                    beta,
+                    elements,
+                },
+            )?;
             self.stream.synchronize()?;
             let actual = output.to_vec(&self.stream)?;
 
