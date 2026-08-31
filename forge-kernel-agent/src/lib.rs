@@ -229,11 +229,7 @@ impl MeasurementEvidence {
         {
             return Err(ContractError::InvalidNumericField("samples_ms"));
         }
-        if self
-            .metrics
-            .values()
-            .any(|value| !value.is_finite())
-        {
+        if self.metrics.values().any(|value| !value.is_finite()) {
             return Err(ContractError::InvalidNumericField("metrics"));
         }
         Ok(())
@@ -296,10 +292,12 @@ pub fn evaluate_candidate<B: KernelBackend>(
         .map_err(EvaluationError::Backend)?;
 
     if verification.schema_version != VERIFICATION_EVIDENCE_SCHEMA_VERSION {
-        return Err(EvaluationError::Contract(ContractError::UnsupportedSchema {
-            kind: "verification_evidence",
-            version: verification.schema_version,
-        }));
+        return Err(EvaluationError::Contract(
+            ContractError::UnsupportedSchema {
+                kind: "verification_evidence",
+                version: verification.schema_version,
+            },
+        ));
     }
     if verification.oracle_id.trim().is_empty() {
         return Err(EvaluationError::Contract(ContractError::InvalidField(
