@@ -1,0 +1,105 @@
+schema_version: 1
+kind: forge_kernel_agent_program
+status: active
+last_updated: "2026-09-01"
+repository: Memorithm/Forge
+merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
+
+mission: >-
+  Build a reusable execution-driven kernel optimization layer inspired by the
+  observed CUDA-Agent workflow while preserving Forge ownership of search and
+  leaving runtime semantics, correctness oracles and final promotion authority
+  in destination repositories such as NNIS, FLAT-ATTENTION and SciRust.
+
+principles:
+  - PROPOSE_OR_MUTATE_then_COMPILE_then_VERIFY_then_MEASURE_then_SELECT
+  - candidate_source_never_self_reports_fitness
+  - independent_or_destination_owned_oracles_gate_every_survivor
+  - numerical_policy_is_explicit_and_versioned
+  - baseline_and_candidate_must_share_comparable_dtype_math_and_environment_contracts
+  - mixed_precision_TF32_or_relaxed_tolerance_never_counts_as_a_speedup_without_explicit_campaign_semantics
+  - compile_success_is_not_correctness
+  - isolated_kernel_speed_is_not_end_to_end_product_performance
+  - destination_repository_requalification_is_required_before_promotion
+  - generated_native_code_requires_the_declared_isolation_boundary
+  - no_dependency_on_PyTorch_is_required_for_the_Rust_kernel_agent_core
+
+architecture:
+  forge_kernel_agent:
+    owns:
+      - versioned_kernel_task_contract
+      - candidate_source_identity
+      - numerical_contract
+      - verification_and_measurement_envelopes
+      - backend_trait_for_compile_verify_measure
+      - campaign_level_selection_inputs
+  forge_nnis:
+    owns:
+      - adapter_from_kernel_agent_contract_to_NNIS_NVRTC_and_CUDA_Driver_execution
+      - translation_of_NNIS_benchmark_evidence_without_weakening_environment_compatibility
+    does_not_own:
+      - NNIS_kernel_or_model_semantics
+      - NNIS_runtime_promotion
+  destination_repositories:
+    own:
+      - independent_reference_oracle
+      - supported_dtype_and_math_policy
+      - end_to_end_requalification
+      - production_promotion
+
+initial_vertical_slice:
+  name: AXPBY_like_elementwise_contract
+  reason: >-
+    Exercise the complete source-to-artifact-to-verification-to-measurement path
+    with a simple operation before attention or decoder kernels.
+  gates:
+    - deterministic_task_identity
+    - explicit_f32_numerical_contract
+    - backend_compile_artifact_identity
+    - independent_expected_output
+    - measurement_evidence_separate_from_verification
+    - no_candidate_selection_when_verification_fails
+
+phases:
+  - id: KA0
+    name: Versioned generic kernel-agent contract
+    status: active
+    goals:
+      - add_forge_kernel_agent_workspace_crate
+      - define_task_candidate_numerical_verification_measurement_and_backend_contracts
+      - add_unit_tests_for_fail_closed_verification_and_comparability
+  - id: KA1
+    name: NNIS backend adapter
+    status: next
+    goals:
+      - compile_candidate_source_through_NNIS_NVRTC
+      - execute_through_NNIS_runtime_without_PyTorch
+      - consume_NNIS_CUDA_event_benchmark_reports
+      - preserve_NNIS_environment_fingerprint_compatibility_checks
+  - id: KA2
+    name: Closed-loop candidate search
+    status: planned
+    goals:
+      - connect_existing_Forge_mutation_and_selection_to_kernel_agent_tasks
+      - retain_all_rejections_that_influence_search_policy
+      - support_deterministic_seeded_non_LLM_mutation_baseline_before_LLM_claims
+  - id: KA3
+    name: Transformer kernel campaigns
+    status: planned
+    goals:
+      - RMSNorm_softmax_GEMV_GEMM_RoPE_attention
+      - require_destination_owned_oracles_and_real_hardware_measurement
+      - never_promote_from_microbenchmarks_alone
+  - id: KA4
+    name: FLAT_attention_and_KV_specialization
+    status: planned
+    goals:
+      - consume_FLAT_and_NNIS_versioned_semantics
+      - optimize_layout_tiling_fusion_and_launch_policy_without_changing_logical_attention
+      - require_end_to_end_decode_requalification
+
+success_definition: >-
+  Forge can search native GPU kernel implementations through a backend-neutral
+  Rust contract, with independent correctness preceding trustworthy measurement,
+  and can hand promotion-ready evidence to NNIS or another destination without
+  self-authorizing runtime changes.
