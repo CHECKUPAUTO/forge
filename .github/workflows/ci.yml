@@ -29,6 +29,15 @@ jobs:
         run: cargo test -p forge-core --lib --features bandit
       - name: Clippy LLM + bandit paths
         run: cargo clippy -p forge-core --all-targets --features bandit -- -D warnings
+
+  nnis-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Format NNIS adapter
         run: cargo fmt --manifest-path adapters/forge-nnis/Cargo.toml --all -- --check
       - name: Check NNIS adapter
