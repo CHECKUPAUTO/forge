@@ -1,0 +1,62 @@
+schema_version: 1
+kind: memorithm_ml_maturity_program
+status: active
+last_updated: "2026-08-31"
+repository: Memorithm/forge
+objective: >-
+  Raise Forge's contribution to ecosystem ML maturity to 5/5 as the trusted
+  execution-driven search engine for kernels, representations and compiler
+  schedules. Forge proposes and evaluates; it does not own SciRust runtime
+  semantics or promote unverified candidates.
+score_policy:
+  five_of_five_requires:
+    - compile_verify_measure_select_remains_authoritative
+    - independent_holdout_oracles_for_every_ML_search_domain
+    - hostile_candidate_isolation_boundary_matches_declared_threat_model
+    - measurement_environment_identity_is_recorded
+    - exact_head_required_CI_green
+  forbidden:
+    - LLM_score_as_fitness_without_execution
+    - optimizing_only_microbenchmarks_when_task_quality_is_part_of_the_contract
+    - sharing_persistent_cache_across_incompatible_hardware_or_toolchains
+priority_program:
+  - id: FGML0
+    name: ML domain contracts
+    priority: P0
+    goals:
+      - add_versioned_domains_for_tensor_kernel_fusion_attention_schedule_and_representation_search
+      - consume_SciRust_or_FLAT_reference_oracles_without_copying_runtime_ownership
+      - separate_correctness_quality_memory_latency_and_compile_cost_objectives
+  - id: FGML1
+    name: Candidate isolation
+    priority: P0
+    goals:
+      - provide_real_sandbox_boundary_for_untrusted_generated_native_code_or_require_external_isolation_fail_closed
+      - bound_CPU_memory_wall_time_filesystem_and_network_by_domain_policy
+      - retain_WASM_path_where_semantics_are_sufficient
+  - id: FGML2
+    name: Distributed trusted evaluation
+    priority: P0
+    goals:
+      - add_authenticated_encrypted_worker_transport_or_integrate_through_a_trusted_Hub_boundary
+      - bind_worker_hardware_toolchain_driver_and_domain_identity_into_results
+      - prevent_replay_duplicate_or_candidate_identity_confusion
+  - id: FGML3
+    name: Search reproducibility and evidence
+    priority: P0
+    goals:
+      - version_campaign_manifests_mutation_policy_seeds_holdouts_and_objectives
+      - export_survivor_and_rejection_evidence_for_SciRust_Verify
+      - retain_negative_results_and_failed_candidates_when_they_change_search_policy
+  - id: FGML4
+    name: Production promotion gate
+    priority: P1
+    goals:
+      - require_destination_repository_requalification_before_promotion
+      - require_real_hardware_measurement_for_hardware_specific_candidates
+      - never_merge_candidate_code_solely_from_Forge_fitness
+completion_definition: >-
+  Forge is 5/5 when it can safely and reproducibly search meaningful ML kernel,
+  fusion, schedule and representation spaces across trusted workers, while
+  preserving independent correctness/quality gates and producing promotion-ready
+  evidence rather than self-authorizing code changes.
