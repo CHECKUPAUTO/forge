@@ -80,6 +80,33 @@ phase_evidence:
       CompiledCode, Module, Kernel, KernelLaunch and launch configuration; nnis-rt
       exports Context, Stream, Event and DeviceBuffer. No new NNIS CUDA API is
       required for the first adapter slice.
+  KA1_host_qualification:
+    forge_main_commit: 9762e78c8e89f570078a694f0c417932c1fa5fea
+    pull_request: 10
+    exact_head_ci: 53a4b466d1f62e189dc1791895251e5ac6ab1efe
+    pinned_nnis_commit: a4635547f3e46abd6652f8d319093dabc0baee6f
+    result: passed
+    gates:
+      - forge_workspace_format_check_clippy_tests_bandit
+      - forge_nnis_format
+      - forge_nnis_check_all_targets
+      - forge_nnis_clippy_deny_warnings
+      - forge_nnis_host_tests
+    implemented:
+      - isolated_forge_nnis_adapter_workspace
+      - strict_f32_axpby_task_gate
+      - NVRTC_compile_through_nnis_jit
+      - NNIS_Driver_API_launch_path
+      - deterministic_multi_trial_host_oracle
+      - verification_before_measurement
+      - CUDA_event_measurement_translation
+      - fail_closed_NNIS_environment_completeness_gate
+      - real_GPU_axpby_smoke_example_with_wrong_candidate_rejection
+    remaining_before_KA1_completion:
+      - execute_axpby_smoke_on_real_NVIDIA_hardware
+      - retain_machine_readable_GPU_evidence
+      - confirm_wrong_candidate_is_unmeasured_on_hardware
+      - confirm_correct_candidate_verifies_and_produces_CUDA_event_samples
 
 phases:
   - id: KA0
@@ -97,6 +124,7 @@ phases:
       - execute_through_NNIS_runtime_without_PyTorch
       - consume_NNIS_CUDA_event_benchmark_reports
       - preserve_NNIS_environment_fingerprint_compatibility_checks
+      - qualify_first_vertical_slice_on_real_NVIDIA_hardware
   - id: KA2
     name: Closed-loop candidate search
     status: planned
