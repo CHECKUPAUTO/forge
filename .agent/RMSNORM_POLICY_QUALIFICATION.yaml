@@ -23,7 +23,6 @@ primary_shape_matrix:
     platform_model: NVIDIA Jetson AGX Thor Developer Kit
     gpu_name: NVIDIA Thor
     compute_capability: "11.0"
-    gpu_uuid: a7c66ad2-6dbb-0ab8-c1a2-37ba6dba3600
     driver_version: "13.0"
     nvrtc_version: "13.0"
     host_arch: aarch64
@@ -47,6 +46,33 @@ primary_policy_reduction:
   candidate_recommendations: 12
   baseline_recommendations: 0
   inconclusive: 4
+
+secondary_shape_matrix:
+  result: passed
+  forge_commit: 807b42dc17e623d1c96030b2266ed679bc538dd8
+  run_context_id: ka6-rmsnorm-matrix-repeat-thor-20260901T123709Z
+  experiment:
+    shape_count: 16
+    rounds_per_shape: 4
+    warmup_iterations_per_observation: 20
+    measured_iterations_per_observation: 100
+  policy_reduction:
+    candidate_recommendations: 12
+    baseline_recommendations: 0
+    inconclusive: 4
+
+policy_consensus:
+  result: passed
+  implementation_pull_request: 19
+  implementation_exact_head_ci: 4c3ab74b5f4b8a02443119aeb0294dd3fc38d6bf
+  implementation_merge_commit: 807b42dc17e623d1c96030b2266ed679bc538dd8
+  independent_runs: 2
+  run_context_ids:
+    - ka5-rmsnorm-matrix-thor-20260901T105650Z
+    - ka6-rmsnorm-matrix-repeat-thor-20260901T123709Z
+  candidate_recommendations: 12
+  baseline_recommendations: 0
+  inconclusive: 4
   candidate_preferred_shapes:
     - [1, 2048]
     - [1, 4096]
@@ -66,27 +92,26 @@ primary_policy_reduction:
     - [128, 4096]
     - [128, 5120]
 
-inter_run_consensus_gate:
+raw_environment_and_experiment_consensus_gate:
   implementation_result: passed
-  pull_request: 19
-  exact_head_ci: 4c3ab74b5f4b8a02443119aeb0294dd3fc38d6bf
-  merge_commit: 807b42dc17e623d1c96030b2266ed679bc538dd8
+  pull_request: 20
+  exact_head_ci: c795ab4314492d40719c1bf544dbf49aecbbe75a
+  merge_commit: 11d707e55749ab7bbd7bcd544e157c199bbfd303
+  status: awaiting_existing_raw_evidence_validation
   minimum_independent_runs: 2
-  status: awaiting_second_independent_hardware_run
   fail_closed_requirements:
     - distinct_run_context_ids
-    - identical_source_campaign_semantics
-    - identical_block_sizes
-    - identical_shape_sets
-    - identical_round_counts
-    - identical_policy_thresholds
-    - recompute_each_policy_decision_from_threshold_inputs
-    - unanimous_candidate_or_baseline_preference_required
-    - disagreement_becomes_inconclusive
+    - exact_shape_block_round_warmup_iteration_identity
+    - exact_epsilon_gamma_atol_rtol_identity
+    - exact_report_case_dtype_dimension_identity
+    - clean_git_metadata
+    - nested_run_context_matches_campaign
+    - stable_GPU_compute_driver_NVRTC_NNIS_OS_kernel_clock_and_power_identity
+    - timestamp_and_run_context_are_the_only_excluded_volatile_environment_fields
 
 claim_boundary: >-
-  The current evidence qualifies one real-hardware RMSNorm microbenchmark campaign
-  and its fail-closed policy reduction. It does not yet establish repeatability,
-  authorize an NNIS runtime policy, or imply end-to-end model speedup. A second
-  independent hardware run and consensus are required before destination-owned
-  NNIS promotion can be considered.
+  Two independent real-hardware RMSNorm microbenchmark campaigns now reproduce
+  the same fail-closed policy outcome: twelve shapes prefer block 512 and four
+  remain inconclusive under the declared thresholds. Runtime promotion is still
+  unauthorized until the raw environment/experiment consensus gate passes and
+  NNIS performs its destination-owned end-to-end requalification.
