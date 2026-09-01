@@ -179,14 +179,7 @@ fn recommend_policy(source: &Value, thresholds: Thresholds) -> PolicyResult<Valu
         let candidate_median_ms = positive_f64(result, "median_candidate_ms")?;
         let paired_improvement = finite_f64(result, "median_paired_relative_improvement")?;
         let speedup_ratio = positive_f64(result, "aggregate_microbenchmark_speedup_ratio")?;
-        let derived_improvement = (baseline_median_ms - candidate_median_ms) / baseline_median_ms;
         let derived_ratio = baseline_median_ms / candidate_median_ms;
-        require_close(
-            paired_improvement,
-            derived_improvement,
-            5.0e-3,
-            &format!("shape {rows}x{cols} relative improvement"),
-        )?;
         require_close(
             speedup_ratio,
             derived_ratio,
@@ -500,6 +493,19 @@ mod tests {
     }
 
     #[test]
+    fn paired_improvement_is_not_forced_to_equal_ratio_of_medians() {
+        let mut row = result(32, 4096, 0.010, 0.008, 4, 0, 0);
+        row["median_paired_relative_improvement"] = json!(0.04);
+        let evidence = source(vec![row], 1, 0, 0);
+        let recommendation = recommend_policy(&evidence, defaults()).unwrap();
+        assert_eq!(recommendation["candidate_recommendations"], 1);
+        assert_eq!(
+            recommendation["recommendations"][0]["median_paired_relative_improvement"],
+            0.04
+        );
+    }
+
+    #[test]
     fn small_margin_remains_inconclusive_even_with_all_round_wins() {
         let evidence = source(vec![result(32, 2048, 0.008224, 0.008160, 4, 0, 0)], 1, 0, 0);
         let recommendation = recommend_policy(&evidence, defaults()).unwrap();
@@ -536,7 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn inconsistent_derived_metrics_fail_closed() {
+    fn inconsistent_derived_ratio_fails_closed() {
         let mut row = result(1, 4096, 0.010, 0.008, 4, 0, 0);
         row["aggregate_microbenchmark_speedup_ratio"] = json!(9.0);
         let evidence = source(vec![row], 1, 0, 0);
