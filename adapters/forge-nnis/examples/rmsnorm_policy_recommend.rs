@@ -107,13 +107,17 @@ fn recommend_policy(source: &Value, thresholds: Thresholds) -> PolicyResult<Valu
             "baseline and candidate block sizes must differ".to_string(),
         ));
     }
-    let rounds = usize_from_u64(positive_u64(root, "rounds_per_shape")?, "rounds_per_shape")?;
+    let rounds = usize_from_u64(
+        positive_u64(root, "rounds_per_shape")?,
+        "rounds_per_shape",
+    )?;
     if rounds < 2 {
         return Err(PolicyError(
             "rounds_per_shape must be at least 2".to_string(),
         ));
     }
-    let declared_shape_count = usize_from_u64(positive_u64(root, "shape_count")?, "shape_count")?;
+    let declared_shape_count =
+        usize_from_u64(positive_u64(root, "shape_count")?, "shape_count")?;
     let results = array_field(root, "results")?;
     if results.len() != declared_shape_count {
         return Err(PolicyError(format!(
@@ -130,7 +134,8 @@ fn recommend_policy(source: &Value, thresholds: Thresholds) -> PolicyResult<Valu
         nonnegative_u64(root, "baseline_shape_wins")?,
         "baseline_shape_wins",
     )?;
-    let declared_shape_ties = usize_from_u64(nonnegative_u64(root, "shape_ties")?, "shape_ties")?;
+    let declared_shape_ties =
+        usize_from_u64(nonnegative_u64(root, "shape_ties")?, "shape_ties")?;
     if declared_candidate_shape_wins + declared_baseline_shape_wins + declared_shape_ties
         != declared_shape_count
     {
@@ -168,7 +173,8 @@ fn recommend_policy(source: &Value, thresholds: Thresholds) -> PolicyResult<Valu
             nonnegative_u64(result, "baseline_round_wins")?,
             "baseline_round_wins",
         )?;
-        let round_ties = usize_from_u64(nonnegative_u64(result, "round_ties")?, "round_ties")?;
+        let round_ties =
+            usize_from_u64(nonnegative_u64(result, "round_ties")?, "round_ties")?;
         if candidate_round_wins + baseline_round_wins + round_ties != rounds {
             return Err(PolicyError(format!(
                 "shape {rows}x{cols} round wins/ties do not sum to rounds_per_shape"
@@ -350,10 +356,7 @@ fn require_str(
     Ok(())
 }
 
-fn nonempty_string(
-    object: &serde_json::Map<String, Value>,
-    field: &str,
-) -> PolicyResult<String> {
+fn nonempty_string(object: &serde_json::Map<String, Value>, field: &str) -> PolicyResult<String> {
     let value = object
         .get(field)
         .and_then(Value::as_str)
@@ -457,7 +460,12 @@ mod tests {
         })
     }
 
-    fn source(results: Vec<Value>, candidate_shape_wins: u64, baseline_shape_wins: u64, ties: u64) -> Value {
+    fn source(
+        results: Vec<Value>,
+        candidate_shape_wins: u64,
+        baseline_shape_wins: u64,
+        ties: u64,
+    ) -> Value {
         json!({
             "schema_version": SOURCE_SCHEMA_VERSION,
             "campaign_kind": SOURCE_CAMPAIGN_KIND,
@@ -482,7 +490,12 @@ mod tests {
 
     #[test]
     fn recommends_candidate_only_with_material_unanimous_win() {
-        let evidence = source(vec![result(32, 4096, 0.010, 0.008, 4, 0, 0)], 1, 0, 0);
+        let evidence = source(
+            vec![result(32, 4096, 0.010, 0.008, 4, 0, 0)],
+            1,
+            0,
+            0,
+        );
         let recommendation = recommend_policy(&evidence, defaults()).unwrap();
         assert_eq!(recommendation["candidate_recommendations"], 1);
         assert_eq!(recommendation["baseline_recommendations"], 0);
@@ -499,7 +512,12 @@ mod tests {
 
     #[test]
     fn small_margin_remains_inconclusive_even_with_all_round_wins() {
-        let evidence = source(vec![result(32, 2048, 0.008224, 0.008160, 4, 0, 0)], 1, 0, 0);
+        let evidence = source(
+            vec![result(32, 2048, 0.008224, 0.008160, 4, 0, 0)],
+            1,
+            0,
+            0,
+        );
         let recommendation = recommend_policy(&evidence, defaults()).unwrap();
         assert_eq!(recommendation["candidate_recommendations"], 0);
         assert_eq!(recommendation["inconclusive"], 1);
@@ -512,7 +530,12 @@ mod tests {
 
     #[test]
     fn material_unanimous_regression_can_prefer_baseline() {
-        let evidence = source(vec![result(128, 2048, 0.010, 0.011, 0, 4, 0)], 0, 1, 0);
+        let evidence = source(
+            vec![result(128, 2048, 0.010, 0.011, 0, 4, 0)],
+            0,
+            1,
+            0,
+        );
         let recommendation = recommend_policy(&evidence, defaults()).unwrap();
         assert_eq!(recommendation["baseline_recommendations"], 1);
         assert_eq!(
