@@ -1,0 +1,55 @@
+schema_version: 1
+kind: forge_kernel_agent_hardware_campaign
+status: hardware_qualification_pending
+last_updated: "2026-09-01"
+repository: Memorithm/Forge
+merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
+
+campaign:
+  id: KA2-AXPBY-LAUNCH-V1
+  operation: axpby
+  source_language: cuda_cpp
+  numerical_contract: strict_f32_TF32_disabled
+  baseline_block_size: 256
+  candidate_block_sizes: [64, 128, 512, 1024]
+  primary_metric: median_ms
+  generations: 1
+  candidates_per_generation: 4
+  seed: 20260901
+
+software_evidence:
+  launch_policy_pr: 12
+  launch_policy_merge_commit: 9116fd1ef841bc08d1ace03f6b74036dbf9e4c51
+  campaign_pr: 13
+  campaign_exact_head: b8b67df9aeaed3496567941ab96213d02b970147
+  campaign_merge_commit: 525498d8c69904754ba377b4f7f4656c78374b6c
+  pinned_nnis_commit: a4635547f3e46abd6652f8d319093dabc0baee6f
+  ci_result: passed
+  ci_gates:
+    - forge_workspace_format
+    - forge_workspace_check_all_targets
+    - forge_workspace_clippy_deny_warnings
+    - forge_workspace_tests_all_targets
+    - forge_core_bandit_tests
+    - forge_core_llm_bandit_clippy
+    - forge_nnis_format
+    - forge_nnis_check_all_targets
+    - forge_nnis_clippy_deny_warnings
+    - forge_nnis_host_tests
+
+hardware_gate:
+  required_platform: NVIDIA_Jetson_AGX_Thor
+  run_context_env: NNIS_BENCH_RUN_CONTEXT_ID
+  requires_one_shared_environment_identity: true
+  requires_baseline_verification: true
+  requires_candidate_verification_before_measurement: true
+  speedup_claim_scope: isolated_AXPBY_kernel_microbenchmark_only
+  end_to_end_NNIS_claim_allowed: false
+
+next_evidence:
+  - run_exact_campaign_merge_commit_on_Thor
+  - preserve_full_JSON_report
+  - verify_all_comparable_measurements_share_baseline_environment_id
+  - record_baseline_median_ms
+  - record_each_candidate_median_ms_or_rejection
+  - record_winner_only_if_strictly_better_than_baseline
