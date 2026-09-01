@@ -515,9 +515,10 @@ mod tests {
             _ordinal: u32,
             _parent: &KernelCandidate,
         ) -> Result<KernelCandidate, Self::Error> {
-            let source = self.script.get(self.cursor).copied().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::UnexpectedEof, "script exhausted")
-            })?;
+            let source =
+                self.script.get(self.cursor).copied().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "script exhausted")
+                })?;
             self.cursor += 1;
             Ok(KernelCandidate::new(KernelSourceLanguage::CudaCpp, source))
         }
