@@ -1,10 +1,10 @@
 schema_version: 1
 kind: forge_nnis_rmsnorm_policy_qualification
-status: microbenchmark_inter_run_qualified
+status: weighted_decoder_candidate_inconclusive
 last_updated: "2026-09-01"
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
 
-scope:
+canonical_rmsnorm_scope:
   operation: canonical_f32_rmsnorm
   baseline_block_size: 256
   candidate_block_size: 512
@@ -114,19 +114,76 @@ inter_run_environment_consensus:
     host_kernel_release: 6.8.12-tegra
     jetson_power_mode: MAXN
 
-promotion_state:
-  forge_search_decision: qualified_for_destination_requalification
+semantic_transfer_audit:
+  result: canonical_policy_not_transferable_to_decoder
+  reason: >-
+    The canonical campaign exercises nnis-kernels F32RmsNorm with scalar gamma,
+    while the NNIS decoder uses nnis-model weighted RMSNorm with a distinct
+    per-channel weight vector. Current SmolLM2 execution is token-serial, making
+    rows=1 and hidden_size=576 the destination-owned runtime geometry.
+  nnis_candidate_surface_pull_request: 70
+  nnis_candidate_surface_merge_commit: 08b6065e1faa2a5942bb0d6b449cde5dbbad4e5f
+  runtime_default_changed: false
+
+weighted_decoder_requalification:
+  result: inconclusive
+  forge_campaign_pull_request: 21
+  forge_campaign_merge_commit: 43b8d1db7dd182339b0ed59b71dff4735e5ee746
+  run_context_id: ka7-smollm2-weighted-rmsnorm-thor-20260901T193835Z
+  model: HuggingFaceTB/SmolLM2-135M
+  rows: 1
+  cols: 576
+  rms_norm_eps: 0.00001
+  weighted_rmsnorm_launches_per_token: 61
+  experiment:
+    baseline_block_size: 256
+    candidate_block_size: 512
+    rounds: 12
+    warmup_iterations_per_observation: 100
+    measured_iterations_per_observation: 1000
+  verification:
+    baseline_passed: true
+    candidate_passed: true
+    baseline_max_abs_error: 2.518271335905098e-7
+    candidate_max_abs_error: 2.518271335905098e-7
+    baseline_max_rel_error: 1.871265264314478e-7
+    candidate_max_rel_error: 1.871265264314478e-7
+  outcome:
+    candidate_round_wins: 8
+    baseline_round_wins: 0
+    round_ties: 4
+    median_baseline_ms: 0.006175999995321035
+    median_candidate_ms: 0.006175999995321035
+    median_paired_relative_improvement: 0.005154603603564409
+    aggregate_microbenchmark_speedup_ratio: 1.0
+
+weighted_decoder_policy_reducer:
+  result: implemented
+  pull_request: 22
+  exact_head_ci: 5ecfcb19d36b323fa69008d9774add6f98ca95c5
+  merge_commit: bea7ab14bde5c197d9a26cb14a64b173d62301e3
+  minimum_relative_improvement: 0.03
+  minimum_non_tie_win_fraction: 1.0
+  expected_ka7_decision: inconclusive
+  recommended_block_size: null
   nnis_runtime_default_authorized: false
+
+promotion_state:
+  canonical_f32_rmsnorm: qualified_only_for_its_own_semantics
+  weighted_decoder_rmsnorm: inconclusive
+  nnis_runtime_default_authorized: false
+  production_block_size: 256
   next_gate: >-
-    Destination-owned NNIS opt-in shape-aware RMSNorm plan with block 512 only
-    for the 12 unanimously qualified shapes, block 256 fallback for the four
-    inconclusive shapes and unknown shapes, followed by exact-head CI and real
-    model end-to-end requalification before any runtime-default promotion.
+    Do not spend an end-to-end SmolLM2 campaign on the weighted RMSNorm block-512
+    candidate because its isolated effect does not clear the 3 percent evidence
+    threshold. Preserve the production block-256 path and redirect search effort
+    toward a materially larger decoder hotspot.
 
 claim_boundary: >-
-  Two independent physical Thor campaigns now agree on the same 12 candidate
-  shapes and four inconclusive shapes, and all 256 nested benchmark metadata
-  records pass a fail-closed cross-run environment and experiment identity gate.
-  This qualifies the RMSNorm launch policy for destination-owned NNIS
-  requalification only. It does not establish an end-to-end model speedup and
-  does not authorize changing the NNIS runtime default.
+  The canonical RMSNorm launch policy is repeatable for its own scalar-gamma
+  semantics, but that evidence does not transfer to the decoder weighted
+  RMSNorm. The real SmolLM2 weighted-RMSNorm 1x576 campaign verified both paths
+  numerically and observed only about 0.515 percent median paired improvement,
+  with identical aggregate medians. The block-512 decoder candidate is therefore
+  inconclusive and no NNIS runtime promotion or end-to-end speedup claim is
+  authorized.
