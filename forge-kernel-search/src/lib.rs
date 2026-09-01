@@ -515,10 +515,9 @@ mod tests {
             _ordinal: u32,
             _parent: &KernelCandidate,
         ) -> Result<KernelCandidate, Self::Error> {
-            let source =
-                self.script.get(self.cursor).copied().ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::UnexpectedEof, "script exhausted")
-                })?;
+            let source = self.script.get(self.cursor).copied().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::UnexpectedEof, "script exhausted")
+            })?;
             self.cursor += 1;
             Ok(KernelCandidate::new(KernelSourceLanguage::CudaCpp, source))
         }
@@ -556,7 +555,7 @@ mod tests {
             .attempts
             .iter()
             .filter_map(|attempt| attempt.candidate.as_ref())
-            .all(|candidate| candidate.id == candidate.id()));
+            .all(|candidate| candidate.validate().is_ok()));
         let winner_id = KernelCandidate::new(KernelSourceLanguage::CudaCpp, "faster").id;
         assert_eq!(report.winner_candidate_id, Some(winner_id));
         assert!(matches!(
