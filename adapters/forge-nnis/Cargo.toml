@@ -14,5 +14,6 @@ forge-kernel-agent = { path = "../../forge-kernel-agent" }
 forge-kernel-search = { path = "../../forge-kernel-search" }
 nnis-bench = { git = "https://github.com/Memorithm/NNIS.git", rev = "a4635547f3e46abd6652f8d319093dabc0baee6f", package = "nnis-bench" }
 nnis-jit = { git = "https://github.com/Memorithm/NNIS.git", rev = "a4635547f3e46abd6652f8d319093dabc0baee6f", package = "nnis-jit" }
+nnis-kernels = { git = "https://github.com/Memorithm/NNIS.git", rev = "a4635547f3e46abd6652f8d319093dabc0baee6f", package = "nnis-kernels" }
 nnis-rt = { git = "https://github.com/Memorithm/NNIS.git", rev = "a4635547f3e46abd6652f8d319093dabc0baee6f", package = "nnis-rt" }
 serde_json = "1"
