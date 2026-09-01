@@ -63,26 +63,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
 
         let output = DeviceBuffer::<f32>::new(&context, elements)?;
-        rms_norm.fused_normalize_rows(
-            &stream,
-            &input,
-            &output,
-            rows,
-            cols,
-            epsilon,
-            gamma,
-        )?;
+        rms_norm.fused_normalize_rows(&stream, &input, &output, rows, cols, epsilon, gamma)?;
         let actual = output.to_vec(&stream)?;
-        let verification = verify_rmsnorm(
-            &input_host,
-            &actual,
-            rows,
-            cols,
-            epsilon,
-            gamma,
-            atol,
-            rtol,
-        );
+        let verification =
+            verify_rmsnorm(&input_host, &actual, rows, cols, epsilon, gamma, atol, rtol);
         if !verification.passed {
             results.push(json!({
                 "block_size": block_size,
@@ -103,18 +87,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             // SAFETY: input/output/rms_norm/stream remain alive until every
             // benchmark launch is synchronized by benchmark_gpu.
             unsafe {
-                rms_norm.enqueue_fused_rows(
-                    &stream,
-                    &input,
-                    &output,
-                    rows,
-                    cols,
-                    epsilon,
-                    gamma,
-                )
+                rms_norm.enqueue_fused_rows(&stream, &input, &output, rows, cols, epsilon, gamma)
             }
         })?;
-        report.metadata.require_compatible_environment(&report.metadata)?;
+        report
+            .metadata
+            .require_compatible_environment(&report.metadata)?;
         if let Some(reference) = &baseline {
             reference
                 .metadata
@@ -229,8 +207,7 @@ fn verify_rmsnorm(
                 value * value
             })
             .sum();
-        let scale = f64::from(gamma)
-            / (sumsq / cols as f64 + f64::from(epsilon)).sqrt();
+        let scale = f64::from(gamma) / (sumsq / cols as f64 + f64::from(epsilon)).sqrt();
         for index in start..end {
             let expected = f64::from(input[index]) * scale;
             let observed = f64::from(actual[index]);
@@ -261,8 +238,7 @@ fn deterministic_input(elements: usize) -> Vec<f32> {
                 .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
             let bucket = ((mixed >> 32) % 4093) as i32 - 2046;
-            (bucket as f32) * (1.0 / 1024.0)
-                + ((index % 7) as f32 - 3.0) * 0.03125
+            (bucket as f32) * (1.0 / 1024.0) + ((index % 7) as f32 - 3.0) * 0.03125
         })
         .collect()
 }
