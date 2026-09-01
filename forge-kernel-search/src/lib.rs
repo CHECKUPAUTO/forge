@@ -247,7 +247,8 @@ where
                 continue;
             };
 
-            if measurement.environment_id.as_str() != baseline_environment_id.as_str() {
+            let candidate_environment_id = measurement.environment_id.clone();
+            if candidate_environment_id.as_str() != baseline_environment_id.as_str() {
                 attempts.push(CandidateAttempt {
                     generation,
                     ordinal,
@@ -256,7 +257,7 @@ where
                     evaluation: Some(evaluation),
                     rejection: Some(CandidateRejection::IncompatibleEnvironment {
                         baseline_environment_id: baseline_environment_id.clone(),
-                        candidate_environment_id: measurement.environment_id.clone(),
+                        candidate_environment_id,
                     }),
                     eligible_for_selection: false,
                 });
@@ -359,10 +360,10 @@ fn is_better_candidate(
 ) -> bool {
     match current {
         None => true,
-        Some((current_candidate, current_metric)) => {
-            metric < *current_metric
-                || (metric == *current_metric && candidate_id < current_candidate.id)
-        }
+        Some((current_candidate, current_metric)) => metric
+            .total_cmp(current_metric)
+            .then_with(|| candidate_id.cmp(&current_candidate.id))
+            .is_lt(),
     }
 }
 
