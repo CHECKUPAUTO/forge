@@ -1,6 +1,6 @@
 use forge_kernel_agent::{
-    evaluate_candidate, KernelCandidate, KernelEvaluation, KernelLaunchPolicy, KernelSourceLanguage,
-    KernelTask, NumericalContract,
+    evaluate_candidate, KernelCandidate, KernelEvaluation, KernelLaunchPolicy,
+    KernelSourceLanguage, KernelTask, NumericalContract,
 };
 use forge_nnis::NnisAxpbyBackend;
 use nnis_bench::BenchConfig;
