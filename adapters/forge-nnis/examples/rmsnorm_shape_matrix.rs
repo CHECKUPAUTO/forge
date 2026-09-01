@@ -109,7 +109,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             &mut expected_metadata,
         )?;
 
-        match result.median_candidate_ms.total_cmp(&result.median_baseline_ms) {
+        match result
+            .median_candidate_ms
+            .total_cmp(&result.median_baseline_ms)
+        {
             std::cmp::Ordering::Less => candidate_shape_wins += 1,
             std::cmp::Ordering::Greater => baseline_shape_wins += 1,
             std::cmp::Ordering::Equal => shape_ties += 1,
@@ -375,13 +378,7 @@ fn measure_family(
         // benchmark_gpu synchronizes each measured launch.
         unsafe {
             rms_norm.enqueue_fused_rows(
-                stream,
-                input,
-                output,
-                shape.rows,
-                shape.cols,
-                epsilon,
-                gamma,
+                stream, input, output, shape.rows, shape.cols, epsilon, gamma,
             )
         }
     })?;
@@ -448,23 +445,11 @@ fn verify_family(
     rtol: f64,
 ) -> Result<VerificationSummary, Box<dyn Error>> {
     rms_norm.fused_normalize_rows(
-        stream,
-        input,
-        output,
-        shape.rows,
-        shape.cols,
-        epsilon,
-        gamma,
+        stream, input, output, shape.rows, shape.cols, epsilon, gamma,
     )?;
     let actual = output.to_vec(stream)?;
     Ok(verify_rmsnorm(
-        input_host,
-        &actual,
-        shape,
-        epsilon,
-        gamma,
-        atol,
-        rtol,
+        input_host, &actual, shape, epsilon, gamma, atol, rtol,
     ))
 }
 
@@ -498,8 +483,7 @@ fn verify_rmsnorm(
                 value * value
             })
             .sum();
-        let scale =
-            f64::from(gamma) / (sumsq / shape.cols as f64 + f64::from(epsilon)).sqrt();
+        let scale = f64::from(gamma) / (sumsq / shape.cols as f64 + f64::from(epsilon)).sqrt();
         for index in start..end {
             let expected = f64::from(input[index]) * scale;
             let observed = f64::from(actual[index]);
@@ -667,15 +651,7 @@ mod tests {
             (f64::from(input[0]) * scale) as f32,
             (f64::from(input[1]) * scale) as f32,
         ];
-        let verification = verify_rmsnorm(
-            &input,
-            &actual,
-            shape,
-            epsilon,
-            gamma,
-            1.0e-6,
-            1.0e-6,
-        );
+        let verification = verify_rmsnorm(&input, &actual, shape, epsilon, gamma, 1.0e-6, 1.0e-6);
         assert!(verification.passed);
     }
 }
