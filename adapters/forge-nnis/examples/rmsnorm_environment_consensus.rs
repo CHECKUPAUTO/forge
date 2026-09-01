@@ -8,6 +8,8 @@ const SOURCE_SCHEMA_VERSION: u64 = 1;
 const SOURCE_CAMPAIGN_KIND: &str = "forge_nnis_canonical_rmsnorm_shape_matrix_v1";
 const CONSENSUS_SCHEMA_VERSION: u64 = 1;
 const CONSENSUS_KIND: &str = "forge_nnis_rmsnorm_environment_consensus_v1";
+const CASE_NAME: &str = "nnis_f32_rmsnorm_fused";
+const CASE_DTYPE: &str = "f32";
 const DEFAULT_MIN_RUNS: usize = 2;
 
 #[derive(Debug)]
@@ -24,10 +26,23 @@ impl Error for EnvironmentError {}
 type EnvironmentResult<T> = Result<T, EnvironmentError>;
 
 #[derive(Clone, Debug)]
+struct CampaignSpec {
+    identity: Value,
+    shapes: BTreeSet<(u64, u64)>,
+    shape_count: usize,
+    rounds: usize,
+    warmups: u64,
+    iterations: u64,
+    baseline_block_size: u64,
+    candidate_block_size: u64,
+}
+
+#[derive(Clone, Debug)]
 struct ParsedRun {
     run_context_id: String,
+    campaign_identity: Value,
     environment_identity: Value,
-    observation_count: usize,
+    metadata_record_count: usize,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -62,65 +77,203 @@ fn parse_run(source: &Value, label: &str) -> EnvironmentResult<ParsedRun> {
     require_u64(root, "schema_version", SOURCE_SCHEMA_VERSION)?;
     require_str(root, "campaign_kind", SOURCE_CAMPAIGN_KIND)?;
     let run_context_id = nonempty_string(root, "run_context_id")?;
-    let rounds = positive_u64(root, "rounds_per_shape")?;
-    if rounds < 2 {
-        return Err(EnvironmentError(format!(
-            "{label}: rounds_per_shape must be at least 2"
-        )));
-    }
-    let shape_count = usize_from_u64(positive_u64(root, "shape_count")?, "shape_count")?;
+    let campaign = parse_campaign_spec(root, label)?;
     let results = array_field(root, "results")?;
-    if results.len() != shape_count {
+    if results.len() != campaign.shape_count {
         return Err(EnvironmentError(format!(
-            "{label}: shape_count {shape_count} does not match results length {}",
+            "{label}: shape_count {} does not match results length {}",
+            campaign.shape_count,
             results.len()
         )));
     }
 
-    let mut expected_identity: Option<Value> = None;
-    let mut observation_count = 0usize;
+    let mut expected_environment: Option<Value> = None;
+    let mut metadata_record_count = 0usize;
+    let mut seen_shapes = BTreeSet::new();
     for (result_index, result) in results.iter().enumerate() {
-        let result = object(result, &format!("{label}.results[{result_index}]"))?;
-        let observations = array_field(result, "observations")?;
-        if observations.len() != rounds as usize {
+        let result_label = format!("{label}.results[{result_index}]");
+        let result = object(result, &result_label)?;
+        let rows = positive_u64(result, "rows")?;
+        let cols = positive_u64(result, "cols")?;
+        if !campaign.shapes.contains(&(rows, cols)) {
             return Err(EnvironmentError(format!(
-                "{label}.results[{result_index}]: observations length {} does not match rounds_per_shape {rounds}",
-                observations.len()
+                "{result_label}: shape {rows}x{cols} is not declared by the campaign"
+            )));
+        }
+        if !seen_shapes.insert((rows, cols)) {
+            return Err(EnvironmentError(format!(
+                "{result_label}: duplicate shape {rows}x{cols}"
+            )));
+        }
+
+        let observations = array_field(result, "observations")?;
+        if observations.len() != campaign.rounds {
+            return Err(EnvironmentError(format!(
+                "{result_label}: observations length {} does not match rounds_per_shape {}",
+                observations.len(),
+                campaign.rounds
             )));
         }
         for (observation_index, observation) in observations.iter().enumerate() {
-            let observation = object(
-                observation,
-                &format!("{label}.results[{result_index}].observations[{observation_index}]"),
-            )?;
-            for report_field in ["baseline_report", "candidate_report"] {
+            let observation_label =
+                format!("{result_label}.observations[{observation_index}]");
+            let observation = object(observation, &observation_label)?;
+            for (report_field, block_size) in [
+                ("baseline_report", campaign.baseline_block_size),
+                ("candidate_report", campaign.candidate_block_size),
+            ] {
                 let report = object_field(observation, report_field)?;
+                validate_report(
+                    report,
+                    rows,
+                    cols,
+                    block_size,
+                    campaign.warmups,
+                    campaign.iterations,
+                    &observation_label,
+                )?;
                 let metadata = object_field(report, "metadata")?;
                 let identity = environment_identity(metadata, &run_context_id)?;
-                match &expected_identity {
+                match &expected_environment {
                     Some(expected) if expected != &identity => {
                         return Err(EnvironmentError(format!(
                             "{label}: stable environment identity changed within one campaign"
                         )));
                     }
                     Some(_) => {}
-                    None => expected_identity = Some(identity),
+                    None => expected_environment = Some(identity),
                 }
-                observation_count += 1;
+                metadata_record_count = metadata_record_count.checked_add(1).ok_or_else(|| {
+                    EnvironmentError("metadata record count overflows".to_string())
+                })?;
             }
         }
     }
+    if seen_shapes != campaign.shapes {
+        return Err(EnvironmentError(format!(
+            "{label}: result shape set does not match declared campaign shapes"
+        )));
+    }
 
-    let environment_identity = expected_identity.ok_or_else(|| {
+    let environment_identity = expected_environment.ok_or_else(|| {
         EnvironmentError(format!(
             "{label}: no benchmark metadata was found in the campaign"
         ))
     })?;
     Ok(ParsedRun {
         run_context_id,
+        campaign_identity: campaign.identity,
         environment_identity,
-        observation_count,
+        metadata_record_count,
     })
+}
+
+fn parse_campaign_spec(root: &Map<String, Value>, label: &str) -> EnvironmentResult<CampaignSpec> {
+    let baseline_block_size = positive_u64(root, "baseline_block_size")?;
+    let candidate_block_size = positive_u64(root, "candidate_block_size")?;
+    if baseline_block_size == candidate_block_size {
+        return Err(EnvironmentError(format!(
+            "{label}: baseline and candidate block sizes must differ"
+        )));
+    }
+    let shape_count = usize_from_u64(positive_u64(root, "shape_count")?, "shape_count")?;
+    let shape_values = array_field(root, "shapes")?;
+    if shape_values.len() != shape_count {
+        return Err(EnvironmentError(format!(
+            "{label}: shape_count {shape_count} does not match shapes length {}",
+            shape_values.len()
+        )));
+    }
+    let mut shapes = BTreeSet::new();
+    let mut canonical_shapes = Vec::with_capacity(shape_count);
+    for (index, shape) in shape_values.iter().enumerate() {
+        let shape = object(shape, &format!("{label}.shapes[{index}]"))?;
+        let rows = positive_u64(shape, "rows")?;
+        let cols = positive_u64(shape, "cols")?;
+        if !shapes.insert((rows, cols)) {
+            return Err(EnvironmentError(format!(
+                "{label}: duplicate declared shape {rows}x{cols}"
+            )));
+        }
+        canonical_shapes.push(json!({"rows": rows, "cols": cols}));
+    }
+
+    let rounds = usize_from_u64(positive_u64(root, "rounds_per_shape")?, "rounds_per_shape")?;
+    if rounds < 2 {
+        return Err(EnvironmentError(format!(
+            "{label}: rounds_per_shape must be at least 2"
+        )));
+    }
+    let warmups = nonnegative_u64(root, "warmup_iterations_per_observation")?;
+    let iterations = positive_u64(root, "measured_iterations_per_observation")?;
+    let epsilon = finite_f64(root, "epsilon")?;
+    let gamma = finite_f64(root, "gamma")?;
+    let atol = finite_f64(root, "atol")?;
+    let rtol = finite_f64(root, "rtol")?;
+    if epsilon <= 0.0 {
+        return Err(EnvironmentError(format!(
+            "{label}: epsilon must be positive"
+        )));
+    }
+    if atol < 0.0 || rtol < 0.0 {
+        return Err(EnvironmentError(format!(
+            "{label}: tolerances must be non-negative"
+        )));
+    }
+
+    Ok(CampaignSpec {
+        identity: json!({
+            "schema_version": SOURCE_SCHEMA_VERSION,
+            "campaign_kind": SOURCE_CAMPAIGN_KIND,
+            "baseline_block_size": baseline_block_size,
+            "candidate_block_size": candidate_block_size,
+            "shape_count": shape_count,
+            "shapes": canonical_shapes,
+            "rounds_per_shape": rounds,
+            "warmup_iterations_per_observation": warmups,
+            "measured_iterations_per_observation": iterations,
+            "epsilon": epsilon,
+            "gamma": gamma,
+            "atol": atol,
+            "rtol": rtol,
+        }),
+        shapes,
+        shape_count,
+        rounds,
+        warmups,
+        iterations,
+        baseline_block_size,
+        candidate_block_size,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_report(
+    report: &Map<String, Value>,
+    rows: u64,
+    cols: u64,
+    block_size: u64,
+    warmups: u64,
+    iterations: u64,
+    label: &str,
+) -> EnvironmentResult<()> {
+    let case = object_field(report, "case")?;
+    require_str(case, "name", CASE_NAME)?;
+    require_str(case, "dtype", CASE_DTYPE)?;
+    let dimensions = object_field(case, "dimensions")?;
+    require_u64(dimensions, "rows", rows)?;
+    require_u64(dimensions, "cols", cols)?;
+    require_u64(dimensions, "block_size", block_size)?;
+
+    let config = object_field(report, "config")?;
+    require_u64(config, "warmup_iterations", warmups)?;
+    require_u64(config, "iterations", iterations)?;
+    if !report.contains_key("metadata") {
+        return Err(EnvironmentError(format!(
+            "{label}: report metadata is missing"
+        )));
+    }
+    Ok(())
 }
 
 fn environment_identity(
@@ -132,6 +285,7 @@ fn environment_identity(
             "benchmark metadata must come from a clean git tree".to_string(),
         ));
     }
+    let _timestamp = nonnegative_u64(metadata, "unix_timestamp_seconds")?;
     let fingerprint = object_field(metadata, "environment_fingerprint")?;
     require_u64(fingerprint, "schema_version", 1)?;
     let metadata_run_context_id = nonempty_string(fingerprint, "run_context_id")?;
@@ -185,6 +339,12 @@ fn build_consensus(runs: &[ParsedRun], min_runs: usize) -> EnvironmentResult<Val
                 run.run_context_id
             )));
         }
+        if run.campaign_identity != reference.campaign_identity {
+            return Err(EnvironmentError(format!(
+                "run {:?} uses different RMSNorm experiment semantics",
+                run.run_context_id
+            )));
+        }
         if run.environment_identity != reference.environment_identity {
             return Err(EnvironmentError(format!(
                 "run {:?} is not environment-compatible with the reference run",
@@ -192,7 +352,7 @@ fn build_consensus(runs: &[ParsedRun], min_runs: usize) -> EnvironmentResult<Val
             )));
         }
         total_metadata_records = total_metadata_records
-            .checked_add(run.observation_count)
+            .checked_add(run.metadata_record_count)
             .ok_or_else(|| EnvironmentError("metadata record count overflows".to_string()))?;
     }
 
@@ -204,13 +364,14 @@ fn build_consensus(runs: &[ParsedRun], min_runs: usize) -> EnvironmentResult<Val
         "minimum_required_runs": min_runs,
         "run_context_ids": run_context_ids.into_iter().collect::<Vec<_>>(),
         "validated_metadata_records": total_metadata_records,
-        "environment_identity": reference.environment_identity,
+        "campaign_identity": reference.campaign_identity.clone(),
+        "environment_identity": reference.environment_identity.clone(),
         "compatible": true,
-        "volatile_fields_excluded_from_identity": [
+        "volatile_fields_excluded_from_environment_identity": [
             "metadata.unix_timestamp_seconds",
             "metadata.environment_fingerprint.run_context_id"
         ],
-        "claim_boundary": "this gate establishes stable hardware/software environment compatibility across independent RMSNorm microbenchmark campaigns only; it does not establish a kernel speedup, end-to-end NNIS speedup, or runtime-promotion authority",
+        "claim_boundary": "this gate establishes stable hardware/software environment and raw experiment-semantic compatibility across independent RMSNorm microbenchmark campaigns only; it does not establish a kernel speedup, end-to-end NNIS speedup, or runtime-promotion authority",
     }))
 }
 
@@ -230,18 +391,17 @@ fn object_field<'a>(
         .ok_or_else(|| EnvironmentError(format!("{field} must be a JSON object")))
 }
 
-fn array_field<'a>(object: &'a Map<String, Value>, field: &str) -> EnvironmentResult<&'a Vec<Value>> {
+fn array_field<'a>(
+    object: &'a Map<String, Value>,
+    field: &str,
+) -> EnvironmentResult<&'a Vec<Value>> {
     object
         .get(field)
         .and_then(Value::as_array)
         .ok_or_else(|| EnvironmentError(format!("{field} must be a JSON array")))
 }
 
-fn require_u64(
-    object: &Map<String, Value>,
-    field: &str,
-    expected: u64,
-) -> EnvironmentResult<()> {
+fn require_u64(object: &Map<String, Value>, field: &str, expected: u64) -> EnvironmentResult<()> {
     let actual = nonnegative_u64(object, field)?;
     if actual != expected {
         return Err(EnvironmentError(format!(
@@ -298,12 +458,25 @@ fn positive_u64(object: &Map<String, Value>, field: &str) -> EnvironmentResult<u
     Ok(value)
 }
 
+fn finite_f64(object: &Map<String, Value>, field: &str) -> EnvironmentResult<f64> {
+    let value = object
+        .get(field)
+        .and_then(Value::as_f64)
+        .ok_or_else(|| EnvironmentError(format!("{field} must be numeric")))?;
+    if !value.is_finite() {
+        return Err(EnvironmentError(format!("{field} must be finite")));
+    }
+    Ok(value)
+}
+
 fn nullable_string(object: &Map<String, Value>, field: &str) -> EnvironmentResult<Value> {
     match object.get(field) {
         Some(Value::Null) => Ok(Value::Null),
         Some(Value::String(value)) if !value.trim().is_empty() => Ok(Value::String(value.clone())),
         Some(Value::String(_)) => Err(EnvironmentError(format!("{field} must not be empty"))),
-        Some(_) => Err(EnvironmentError(format!("{field} must be a string or null"))),
+        Some(_) => Err(EnvironmentError(format!(
+            "{field} must be a string or null"
+        ))),
         None => Err(EnvironmentError(format!("missing field {field}"))),
     }
 }
@@ -353,22 +526,46 @@ mod tests {
         })
     }
 
+    fn report(run: &str, timestamp: u64, driver: &str, dirty: bool, block: u64) -> Value {
+        json!({
+            "case": {
+                "name": CASE_NAME,
+                "dtype": CASE_DTYPE,
+                "dimensions": {"rows": 1, "cols": 4096, "block_size": block}
+            },
+            "config": {"warmup_iterations": 20, "iterations": 100},
+            "metadata": metadata(run, timestamp, driver, dirty)
+        })
+    }
+
     fn matrix(run: &str, timestamp: u64, driver: &str, dirty: bool) -> Value {
-        let report = |offset| {
-            json!({
-                "metadata": metadata(run, timestamp + offset, driver, dirty)
-            })
-        };
         json!({
             "schema_version": 1,
             "campaign_kind": SOURCE_CAMPAIGN_KIND,
             "run_context_id": run,
+            "baseline_block_size": 256,
+            "candidate_block_size": 512,
             "shape_count": 1,
+            "shapes": [{"rows": 1, "cols": 4096}],
             "rounds_per_shape": 2,
+            "warmup_iterations_per_observation": 20,
+            "measured_iterations_per_observation": 100,
+            "epsilon": 1.0e-6,
+            "gamma": 1.0,
+            "atol": 5.0e-5,
+            "rtol": 5.0e-5,
             "results": [{
+                "rows": 1,
+                "cols": 4096,
                 "observations": [
-                    {"baseline_report": report(0), "candidate_report": report(1)},
-                    {"baseline_report": report(2), "candidate_report": report(3)}
+                    {
+                        "baseline_report": report(run, timestamp, driver, dirty, 256),
+                        "candidate_report": report(run, timestamp + 1, driver, dirty, 512)
+                    },
+                    {
+                        "baseline_report": report(run, timestamp + 2, driver, dirty, 256),
+                        "candidate_report": report(run, timestamp + 3, driver, dirty, 512)
+                    }
                 ]
             }]
         })
@@ -388,6 +585,15 @@ mod tests {
     fn driver_change_fails_closed() {
         let first = parse_run(&matrix("run-a", 100, "13.0", false), "first").unwrap();
         let second = parse_run(&matrix("run-b", 200, "13.1", false), "second").unwrap();
+        assert!(build_consensus(&[first, second], 2).is_err());
+    }
+
+    #[test]
+    fn experiment_change_fails_closed() {
+        let first = parse_run(&matrix("run-a", 100, "13.0", false), "first").unwrap();
+        let mut changed = matrix("run-b", 200, "13.0", false);
+        changed["epsilon"] = json!(2.0e-6);
+        let second = parse_run(&changed, "second").unwrap();
         assert!(build_consensus(&[first, second], 2).is_err());
     }
 
