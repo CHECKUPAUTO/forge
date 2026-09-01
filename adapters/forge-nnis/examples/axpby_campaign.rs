@@ -54,17 +54,14 @@ impl KernelMutator for LaunchPolicyMutator {
         _ordinal: u32,
         parent: &KernelCandidate,
     ) -> Result<KernelCandidate, Self::Error> {
-        let block_size = self
-            .block_sizes
-            .get(self.cursor)
-            .copied()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "launch schedule exhausted"))?;
+        let block_size = self.block_sizes.get(self.cursor).copied().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::UnexpectedEof, "launch schedule exhausted")
+        })?;
         self.cursor += 1;
-        Ok(KernelCandidate::new(
-            parent.source_language.clone(),
-            parent.source.clone(),
+        Ok(
+            KernelCandidate::new(parent.source_language.clone(), parent.source.clone())
+                .with_launch_policy(KernelLaunchPolicy::block_x(block_size)),
         )
-        .with_launch_policy(KernelLaunchPolicy::block_x(block_size)))
     }
 }
 
@@ -97,12 +94,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut mutator,
         &task,
         &baseline,
-        KernelCampaignConfig::new(
-            CAMPAIGN_SEED,
-            1,
-            candidates_per_generation,
-            "median_ms",
-        ),
+        KernelCampaignConfig::new(CAMPAIGN_SEED, 1, candidates_per_generation, "median_ms"),
     )?;
 
     emit_report(run_context, report)?;
@@ -172,12 +164,7 @@ mod tests {
 
         for (ordinal, expected_block_size) in CANDIDATE_BLOCK_SIZES.iter().copied().enumerate() {
             let candidate = mutator
-                .mutate(
-                    CAMPAIGN_SEED,
-                    0,
-                    u32::try_from(ordinal).unwrap(),
-                    &parent,
-                )
+                .mutate(CAMPAIGN_SEED, 0, u32::try_from(ordinal).unwrap(), &parent)
                 .unwrap();
             assert_eq!(candidate.source, parent.source);
             assert_eq!(
