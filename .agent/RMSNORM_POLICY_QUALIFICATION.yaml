@@ -1,6 +1,6 @@
 schema_version: 1
 kind: forge_nnis_rmsnorm_policy_qualification
-status: active
+status: microbenchmark_inter_run_qualified
 last_updated: "2026-09-01"
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
 
@@ -19,15 +19,6 @@ primary_shape_matrix:
   result: passed
   forge_commit: e37260fdc89b2c6c525e55ed10cf82480f701a71
   run_context_id: ka5-rmsnorm-matrix-thor-20260901T105650Z
-  hardware:
-    platform_model: NVIDIA Jetson AGX Thor Developer Kit
-    gpu_name: NVIDIA Thor
-    compute_capability: "11.0"
-    driver_version: "13.0"
-    nvrtc_version: "13.0"
-    host_arch: aarch64
-    host_kernel_release: 6.8.12-tegra
-    jetson_power_mode: MAXN
   experiment:
     shape_count: 16
     rounds_per_shape: 4
@@ -47,7 +38,7 @@ primary_policy_reduction:
   baseline_recommendations: 0
   inconclusive: 4
 
-secondary_shape_matrix:
+second_shape_matrix:
   result: passed
   forge_commit: 807b42dc17e623d1c96030b2266ed679bc538dd8
   run_context_id: ka6-rmsnorm-matrix-repeat-thor-20260901T123709Z
@@ -61,15 +52,11 @@ secondary_shape_matrix:
     baseline_recommendations: 0
     inconclusive: 4
 
-policy_consensus:
+inter_run_policy_consensus:
   result: passed
-  implementation_pull_request: 19
-  implementation_exact_head_ci: 4c3ab74b5f4b8a02443119aeb0294dd3fc38d6bf
-  implementation_merge_commit: 807b42dc17e623d1c96030b2266ed679bc538dd8
-  independent_runs: 2
-  run_context_ids:
-    - ka5-rmsnorm-matrix-thor-20260901T105650Z
-    - ka6-rmsnorm-matrix-repeat-thor-20260901T123709Z
+  pull_request: 19
+  merge_commit: 807b42dc17e623d1c96030b2266ed679bc538dd8
+  run_count: 2
   candidate_recommendations: 12
   baseline_recommendations: 0
   inconclusive: 4
@@ -92,26 +79,54 @@ policy_consensus:
     - [128, 4096]
     - [128, 5120]
 
-raw_environment_and_experiment_consensus_gate:
-  implementation_result: passed
+inter_run_environment_consensus:
+  result: passed
   pull_request: 20
   exact_head_ci: c795ab4314492d40719c1bf544dbf49aecbbe75a
   merge_commit: 11d707e55749ab7bbd7bcd544e157c199bbfd303
-  status: awaiting_existing_raw_evidence_validation
-  minimum_independent_runs: 2
-  fail_closed_requirements:
-    - distinct_run_context_ids
-    - exact_shape_block_round_warmup_iteration_identity
-    - exact_epsilon_gamma_atol_rtol_identity
-    - exact_report_case_dtype_dimension_identity
-    - clean_git_metadata
-    - nested_run_context_matches_campaign
-    - stable_GPU_compute_driver_NVRTC_NNIS_OS_kernel_clock_and_power_identity
-    - timestamp_and_run_context_are_the_only_excluded_volatile_environment_fields
+  consensus_kind: forge_nnis_rmsnorm_environment_consensus_v1
+  run_count: 2
+  run_context_ids:
+    - ka5-rmsnorm-matrix-thor-20260901T105650Z
+    - ka6-rmsnorm-matrix-repeat-thor-20260901T123709Z
+  validated_metadata_records: 256
+  compatible: true
+  campaign_identity:
+    shape_count: 16
+    rounds_per_shape: 4
+    warmup_iterations_per_observation: 20
+    measured_iterations_per_observation: 100
+    baseline_block_size: 256
+    candidate_block_size: 512
+    epsilon: 9.999999974752427e-7
+    gamma: 1.0
+    atol: 0.00005
+    rtol: 0.00005
+  environment_summary:
+    gpu_name: NVIDIA_Thor
+    compute_capability: "11.0"
+    driver_version: "13.0"
+    nvrtc_version: "13.0"
+    nnis_version: "0.1.0"
+    host_arch: aarch64
+    host_os: linux
+    platform_model: NVIDIA_Jetson_AGX_Thor_Developer_Kit
+    host_kernel_release: 6.8.12-tegra
+    jetson_power_mode: MAXN
+
+promotion_state:
+  forge_search_decision: qualified_for_destination_requalification
+  nnis_runtime_default_authorized: false
+  next_gate: >-
+    Destination-owned NNIS opt-in shape-aware RMSNorm plan with block 512 only
+    for the 12 unanimously qualified shapes, block 256 fallback for the four
+    inconclusive shapes and unknown shapes, followed by exact-head CI and real
+    model end-to-end requalification before any runtime-default promotion.
 
 claim_boundary: >-
-  Two independent real-hardware RMSNorm microbenchmark campaigns now reproduce
-  the same fail-closed policy outcome: twelve shapes prefer block 512 and four
-  remain inconclusive under the declared thresholds. Runtime promotion is still
-  unauthorized until the raw environment/experiment consensus gate passes and
-  NNIS performs its destination-owned end-to-end requalification.
+  Two independent physical Thor campaigns now agree on the same 12 candidate
+  shapes and four inconclusive shapes, and all 256 nested benchmark metadata
+  records pass a fail-closed cross-run environment and experiment identity gate.
+  This qualifies the RMSNorm launch policy for destination-owned NNIS
+  requalification only. It does not establish an end-to-end model speedup and
+  does not authorize changing the NNIS runtime default.
