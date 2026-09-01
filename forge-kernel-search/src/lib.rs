@@ -109,6 +109,7 @@ pub struct CandidateAttempt {
     pub ordinal: u32,
     pub parent_candidate_id: CandidateId,
     pub candidate_id: Option<CandidateId>,
+    pub candidate: Option<KernelCandidate>,
     pub evaluation: Option<KernelEvaluation>,
     pub rejection: Option<CandidateRejection>,
     pub eligible_for_selection: bool,
@@ -120,6 +121,7 @@ pub struct KernelCampaignReport {
     pub config: KernelCampaignConfig,
     pub task: KernelTask,
     pub baseline_candidate_id: CandidateId,
+    pub baseline_candidate: KernelCandidate,
     pub baseline_evaluation: KernelEvaluation,
     pub baseline_primary_metric: f64,
     pub baseline_environment_id: String,
@@ -156,6 +158,9 @@ where
     config.validate()?;
     task.validate()
         .map_err(|error| CampaignError::InvalidTask(error.to_string()))?;
+    baseline
+        .validate()
+        .map_err(|error| CampaignError::InvalidBaseline(error.to_string()))?;
 
     let baseline_evaluation = evaluate_candidate(backend, task, baseline)
         .map_err(|error| CampaignError::BaselineEvaluation(error.to_string()))?;
@@ -192,6 +197,7 @@ where
                         ordinal,
                         parent_candidate_id,
                         candidate_id: None,
+                        candidate: None,
                         evaluation: None,
                         rejection: Some(CandidateRejection::MutationFailed {
                             message: error.to_string(),
@@ -211,6 +217,7 @@ where
                         ordinal,
                         parent_candidate_id,
                         candidate_id: Some(candidate_id),
+                        candidate: Some(candidate),
                         evaluation: None,
                         rejection: Some(CandidateRejection::EvaluationFailed {
                             message: error.to_string(),
@@ -227,6 +234,7 @@ where
                     ordinal,
                     parent_candidate_id,
                     candidate_id: Some(candidate_id),
+                    candidate: Some(candidate),
                     evaluation: Some(evaluation),
                     rejection: Some(CandidateRejection::VerificationFailed),
                     eligible_for_selection: false,
@@ -240,6 +248,7 @@ where
                     ordinal,
                     parent_candidate_id,
                     candidate_id: Some(candidate_id),
+                    candidate: Some(candidate),
                     evaluation: Some(evaluation),
                     rejection: Some(CandidateRejection::MissingMeasurement),
                     eligible_for_selection: false,
@@ -254,6 +263,7 @@ where
                     ordinal,
                     parent_candidate_id,
                     candidate_id: Some(candidate_id),
+                    candidate: Some(candidate),
                     evaluation: Some(evaluation),
                     rejection: Some(CandidateRejection::IncompatibleEnvironment {
                         baseline_environment_id: baseline_environment_id.clone(),
@@ -272,6 +282,7 @@ where
                         ordinal,
                         parent_candidate_id,
                         candidate_id: Some(candidate_id),
+                        candidate: Some(candidate),
                         evaluation: Some(evaluation),
                         rejection: Some(rejection),
                         eligible_for_selection: false,
@@ -287,6 +298,7 @@ where
                     ordinal,
                     parent_candidate_id,
                     candidate_id: Some(candidate_id),
+                    candidate: Some(candidate),
                     evaluation: Some(evaluation),
                     rejection: Some(CandidateRejection::NotBetterThanBaseline {
                         baseline_value: baseline_primary_metric,
@@ -302,6 +314,7 @@ where
                 ordinal,
                 parent_candidate_id,
                 candidate_id: Some(candidate_id),
+                candidate: Some(candidate.clone()),
                 evaluation: Some(evaluation),
                 rejection: None,
                 eligible_for_selection: true,
@@ -325,6 +338,7 @@ where
         config,
         task: task.clone(),
         baseline_candidate_id: baseline.id,
+        baseline_candidate: baseline.clone(),
         baseline_evaluation,
         baseline_primary_metric,
         baseline_environment_id,
@@ -372,6 +386,7 @@ pub enum CampaignError {
     UnsupportedSchema(u32),
     InvalidConfig(String),
     InvalidTask(String),
+    InvalidBaseline(String),
     BaselineEvaluation(String),
     BaselineRejected,
     BaselineMissingMeasurement,
@@ -389,6 +404,9 @@ impl Display for CampaignError {
             }
             Self::InvalidConfig(message) => write!(formatter, "invalid campaign config: {message}"),
             Self::InvalidTask(message) => write!(formatter, "invalid campaign task: {message}"),
+            Self::InvalidBaseline(message) => {
+                write!(formatter, "invalid campaign baseline: {message}")
+            }
             Self::BaselineEvaluation(message) => {
                 write!(formatter, "baseline evaluation failed: {message}")
             }
@@ -412,8 +430,8 @@ impl Error for CampaignError {}
 mod tests {
     use super::*;
     use forge_kernel_agent::{
-        CompileEvidence, KernelSourceLanguage, NumericalContract, VerificationEvidence,
-        MEASUREMENT_EVIDENCE_SCHEMA_VERSION,
+        CompileEvidence, KernelLaunchPolicy, KernelSourceLanguage, NumericalContract,
+        VerificationEvidence, MEASUREMENT_EVIDENCE_SCHEMA_VERSION,
     };
     use std::collections::BTreeMap;
     use std::convert::Infallible;
@@ -533,6 +551,12 @@ mod tests {
         assert_eq!(report.rejected_attempts().count(), 3);
         assert_eq!(report.eligible_attempts().count(), 3);
         assert_eq!(report.winner_primary_metric, Some(6.0));
+        assert_eq!(report.baseline_candidate, baseline);
+        assert!(report
+            .attempts
+            .iter()
+            .filter_map(|attempt| attempt.candidate.as_ref())
+            .all(|candidate| candidate.id == candidate.id()));
         let winner_id = KernelCandidate::new(KernelSourceLanguage::CudaCpp, "faster").id;
         assert_eq!(report.winner_candidate_id, Some(winner_id));
         assert!(matches!(
@@ -552,7 +576,8 @@ mod tests {
     #[test]
     fn same_seed_and_script_are_deterministic() {
         fn run() -> KernelCampaignReport {
-            let baseline = KernelCandidate::new(KernelSourceLanguage::CudaCpp, "baseline");
+            let baseline = KernelCandidate::new(KernelSourceLanguage::CudaCpp, "baseline")
+                .with_launch_policy(KernelLaunchPolicy::block_x(256));
             let mut mutator = ScriptedMutator::new(vec!["fast", "faster"]);
             run_kernel_campaign(
                 &MockBackend,
@@ -583,6 +608,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.attempts.len(), 1);
+        assert!(report.attempts[0].candidate.is_none());
         assert!(matches!(
             report.attempts[0].rejection,
             Some(CandidateRejection::MutationFailed { .. })
