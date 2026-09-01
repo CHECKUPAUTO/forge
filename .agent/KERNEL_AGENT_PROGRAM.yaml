@@ -102,11 +102,46 @@ phase_evidence:
       - CUDA_event_measurement_translation
       - fail_closed_NNIS_environment_completeness_gate
       - real_GPU_axpby_smoke_example_with_wrong_candidate_rejection
-    remaining_before_KA1_completion:
-      - execute_axpby_smoke_on_real_NVIDIA_hardware
-      - retain_machine_readable_GPU_evidence
-      - confirm_wrong_candidate_is_unmeasured_on_hardware
-      - confirm_correct_candidate_verifies_and_produces_CUDA_event_samples
+  KA1_hardware_qualification:
+    result: passed
+    run_context_id: ka1-axpby-thor-20260901T062542Z
+    forge_main_commit: 9762e78c8e89f570078a694f0c417932c1fa5fea
+    pinned_nnis_commit: a4635547f3e46abd6652f8d319093dabc0baee6f
+    hardware:
+      platform_model: NVIDIA Jetson AGX Thor Developer Kit
+      gpu_name: NVIDIA Thor
+      host_arch: aarch64
+      compute_capability: "11.0"
+      multiprocessor_count: 20
+      driver_version: "13.0"
+      nvrtc_version: "13.0"
+      host_kernel_release: 6.8.12-tegra
+      jetson_power_mode: MAXN
+    task:
+      operation: axpby
+      elements: 1048576
+      numerical_contract: strict_f32_TF32_disabled
+    rejection_gate:
+      wrong_candidate_id: 1736353473005638305
+      verification_passed: false
+      measured: false
+    accepted_candidate:
+      candidate_id: 14234751339825107857
+      artifact_id: 42d804150fabd0f86cc7818b5aee1df79e4243ace10e234e9c4d56d3ea49637d
+      verification_passed: true
+      max_abs_error: 0.0
+      max_rel_error: 0.0
+      samples: 50
+      warmup_iterations: 10
+      median_ms: 0.020608000457286835
+      mean_ms: 0.020865280106663706
+      p95_ms: 0.02163200080394745
+      stddev_ms: 0.000492257731879043
+      observed_gigabytes_per_second: 610.5838373829606
+    claim_boundary: >-
+      This closes the native execution and evidence-path qualification only.
+      No speedup claim is made because this run did not include a compatible
+      baseline-vs-candidate comparison campaign.
 
 phases:
   - id: KA0
@@ -118,7 +153,7 @@ phases:
       - add_unit_tests_for_fail_closed_verification_and_comparability
   - id: KA1
     name: NNIS backend adapter
-    status: active
+    status: completed
     goals:
       - compile_candidate_source_through_NNIS_NVRTC
       - execute_through_NNIS_runtime_without_PyTorch
@@ -127,11 +162,12 @@ phases:
       - qualify_first_vertical_slice_on_real_NVIDIA_hardware
   - id: KA2
     name: Closed-loop candidate search
-    status: planned
+    status: active
     goals:
       - connect_existing_Forge_mutation_and_selection_to_kernel_agent_tasks
       - retain_all_rejections_that_influence_search_policy
       - support_deterministic_seeded_non_LLM_mutation_baseline_before_LLM_claims
+      - require_compatible_baseline_and_candidate_measurement_before_speedup_selection
   - id: KA3
     name: Transformer kernel campaigns
     status: planned
