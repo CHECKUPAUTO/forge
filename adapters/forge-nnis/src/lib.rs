@@ -1,13 +1,14 @@
 //! NNIS backend for Forge kernel-agent campaigns.
 //!
 //! The first qualified slice is intentionally narrow: one f32 AXPBY task with
-//! a fixed ABI and launch policy. Forge still owns search; NNIS owns native
-//! CUDA compilation/execution and benchmark evidence. Verification is performed
-//! against a host oracle before the benchmark path can run.
+//! a fixed ABI and an explicit versioned 1-D launch policy. Forge owns search;
+//! NNIS owns native CUDA compilation/execution and benchmark evidence.
+//! Verification is performed against a host oracle before benchmarking.
 
 use forge_kernel_agent::{
-    CompileEvidence, ContractError, KernelBackend, KernelCandidate, KernelSourceLanguage,
-    KernelTask, MeasurementEvidence, VerificationEvidence, MEASUREMENT_EVIDENCE_SCHEMA_VERSION,
+    CompileEvidence, ContractError, KernelBackend, KernelCandidate, KernelLaunchPolicy,
+    KernelSourceLanguage, KernelTask, MeasurementEvidence, VerificationEvidence,
+    MEASUREMENT_EVIDENCE_SCHEMA_VERSION,
 };
 use nnis_bench::{benchmark_gpu, BenchConfig, BenchmarkCase, BenchmarkMetadata};
 use nnis_jit::{
@@ -28,6 +29,7 @@ pub const DEFAULT_VERIFY_TRIALS: u32 = 3;
 pub struct NnisArtifact {
     code: Arc<CompiledCode>,
     elements: usize,
+    block_size: u32,
 }
 
 impl NnisArtifact {
@@ -38,6 +40,10 @@ impl NnisArtifact {
     pub fn elements(&self) -> usize {
         self.elements
     }
+
+    pub fn block_size(&self) -> u32 {
+        self.block_size
+    }
 }
 
 struct AxpbyInvocation<'a> {
@@ -47,6 +53,7 @@ struct AxpbyInvocation<'a> {
     alpha: f32,
     beta: f32,
     elements: usize,
+    block_size: u32,
 }
 
 pub struct NnisAxpbyBackend {
@@ -78,6 +85,9 @@ impl NnisAxpbyBackend {
         Ok(self)
     }
 
+    /// Set the adapter default used by legacy candidates without an explicit
+    /// launch policy. Search candidates should prefer `KernelLaunchPolicy` so
+    /// the launch shape participates in candidate identity.
     pub fn with_block_size(mut self, block_size: u32) -> Result<Self, NnisBackendError> {
         if block_size == 0 || block_size > self.context.props().max_threads_per_block {
             return Err(NnisBackendError::InvalidTask(format!(
@@ -135,6 +145,14 @@ impl NnisAxpbyBackend {
         })
     }
 
+    fn resolve_block_size(&self, candidate: &KernelCandidate) -> Result<u32, NnisBackendError> {
+        resolve_block_size(
+            candidate.launch_policy,
+            self.block_size,
+            self.context.props().max_threads_per_block,
+        )
+    }
+
     fn load_kernel(&self, artifact: &NnisArtifact) -> Result<(Module, Kernel), NnisBackendError> {
         let module = Module::load(&self.context, &artifact.code)?;
         let kernel = module.get_function(AXPBY_ENTRYPOINT)?;
@@ -146,7 +164,7 @@ impl NnisAxpbyBackend {
         kernel: &Kernel,
         invocation: AxpbyInvocation<'_>,
     ) -> Result<(), NnisBackendError> {
-        let config = LaunchConfig::for_num_elements(invocation.elements, self.block_size)?;
+        let config = LaunchConfig::for_num_elements(invocation.elements, invocation.block_size)?;
         let launch = KernelLaunch::new(kernel, &self.stream, config);
         let mut arguments = KernelArgs::with_capacity(6, 3);
         arguments
@@ -174,9 +192,11 @@ impl KernelBackend for NnisAxpbyBackend {
         candidate: &KernelCandidate,
     ) -> Result<(Self::Artifact, CompileEvidence), Self::Error> {
         let elements = Self::validate_task(task)?;
+        candidate.validate().map_err(NnisBackendError::Contract)?;
         if candidate.source_language != KernelSourceLanguage::CudaCpp {
             return Err(NnisBackendError::UnsupportedSourceLanguage);
         }
+        let block_size = self.resolve_block_size(candidate)?;
 
         let options = CompileOptions::for_device(&self.context);
         let code = self.compiler.compile_ptx(&candidate.source, &options)?;
@@ -186,7 +206,11 @@ impl KernelBackend for NnisAxpbyBackend {
         compile_options.extend(options.extra_options().iter().cloned());
 
         Ok((
-            NnisArtifact { code, elements },
+            NnisArtifact {
+                code,
+                elements,
+                block_size,
+            },
             CompileEvidence {
                 artifact_id,
                 compiler_id: "nnis-jit/nvrtc".to_string(),
@@ -228,6 +252,7 @@ impl KernelBackend for NnisAxpbyBackend {
                     alpha,
                     beta,
                     elements,
+                    block_size: artifact.block_size,
                 },
             )?;
             self.stream.synchronize()?;
@@ -280,7 +305,7 @@ impl KernelBackend for NnisAxpbyBackend {
         let left = DeviceBuffer::from_host(&self.context, &self.stream, &left_host)?;
         let right = DeviceBuffer::from_host(&self.context, &self.stream, &right_host)?;
         let output = DeviceBuffer::<f32>::new(&self.context, elements)?;
-        let config = LaunchConfig::for_num_elements(elements, self.block_size)?;
+        let config = LaunchConfig::for_num_elements(elements, artifact.block_size)?;
         let launch = KernelLaunch::new(&kernel, &self.stream, config);
         let mut arguments = KernelArgs::with_capacity(6, 3);
         arguments
@@ -296,6 +321,7 @@ impl KernelBackend for NnisAxpbyBackend {
             .ok_or_else(|| NnisBackendError::InvalidTask("byte count overflow".to_string()))?;
         let case = BenchmarkCase::new("forge_nnis_axpby_f32", "f32")
             .with_dimension("elements", elements as u64)
+            .with_dimension("block_size", u64::from(artifact.block_size))
             .with_work_items(elements as u64)
             .with_bytes_per_iteration(bytes_per_iteration);
 
@@ -315,6 +341,7 @@ impl KernelBackend for NnisAxpbyBackend {
         let environment_id = compatible_environment_id(&report.metadata)?;
 
         let mut metrics = BTreeMap::new();
+        metrics.insert("block_size".to_string(), f64::from(artifact.block_size));
         metrics.insert("min_ms".to_string(), report.statistics.min_ms);
         metrics.insert("median_ms".to_string(), report.statistics.median_ms);
         metrics.insert("mean_ms".to_string(), report.statistics.mean_ms);
@@ -343,6 +370,34 @@ impl KernelBackend for NnisAxpbyBackend {
             metrics,
         })
     }
+}
+
+fn resolve_block_size(
+    launch_policy: Option<KernelLaunchPolicy>,
+    default_block_size: u32,
+    device_max_threads_per_block: u32,
+) -> Result<u32, NnisBackendError> {
+    let Some(policy) = launch_policy else {
+        return Ok(default_block_size);
+    };
+    policy.validate().map_err(NnisBackendError::Contract)?;
+    if policy.block[1] != 1 || policy.block[2] != 1 {
+        return Err(NnisBackendError::InvalidTask(
+            "initial AXPBY backend supports one-dimensional thread blocks only".to_string(),
+        ));
+    }
+    if policy.dynamic_shared_memory_bytes != 0 {
+        return Err(NnisBackendError::InvalidTask(
+            "initial AXPBY backend does not use dynamic shared memory".to_string(),
+        ));
+    }
+    let block_size = policy.block[0];
+    if block_size > device_max_threads_per_block {
+        return Err(NnisBackendError::InvalidTask(format!(
+            "candidate block_size {block_size} exceeds device limit {device_max_threads_per_block}"
+        )));
+    }
+    Ok(block_size)
 }
 
 fn compatible_environment_id(metadata: &BenchmarkMetadata) -> Result<String, NnisBackendError> {
@@ -446,6 +501,24 @@ mod tests {
         let mut wrong_operation = strict_task();
         wrong_operation.operation = "softmax".to_string();
         assert!(NnisAxpbyBackend::validate_task(&wrong_operation).is_err());
+    }
+
+    #[test]
+    fn launch_policy_is_explicit_and_fail_closed() {
+        assert_eq!(resolve_block_size(None, 256, 1024).unwrap(), 256);
+        assert_eq!(
+            resolve_block_size(Some(KernelLaunchPolicy::block_x(128)), 256, 1024).unwrap(),
+            128
+        );
+        assert!(resolve_block_size(Some(KernelLaunchPolicy::block_x(2048)), 256, 1024).is_err());
+
+        let mut non_1d = KernelLaunchPolicy::block_x(128);
+        non_1d.block[1] = 2;
+        assert!(resolve_block_size(Some(non_1d), 256, 1024).is_err());
+
+        let mut shared = KernelLaunchPolicy::block_x(128);
+        shared.dynamic_shared_memory_bytes = 256;
+        assert!(resolve_block_size(Some(shared), 256, 1024).is_err());
     }
 
     #[test]
