@@ -115,8 +115,7 @@ fn parse_run(source: &Value, label: &str) -> EnvironmentResult<ParsedRun> {
             )));
         }
         for (observation_index, observation) in observations.iter().enumerate() {
-            let observation_label =
-                format!("{result_label}.observations[{observation_index}]");
+            let observation_label = format!("{result_label}.observations[{observation_index}]");
             let observation = object(observation, &observation_label)?;
             for (report_field, block_size) in [
                 ("baseline_report", campaign.baseline_block_size),
