@@ -34,7 +34,7 @@ enum PairOrder {
 
 impl PairOrder {
     fn for_round(round: usize) -> Self {
-        if round % 2 == 0 {
+        if round.is_multiple_of(2) {
             Self::BaselineThenCandidate
         } else {
             Self::CandidateThenBaseline
@@ -216,7 +216,7 @@ fn median(values: &[f64]) -> Result<f64, Box<dyn Error>> {
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
     let midpoint = sorted.len() / 2;
-    Ok(if sorted.len() % 2 == 0 {
+    Ok(if sorted.len().is_multiple_of(2) {
         (sorted[midpoint - 1] + sorted[midpoint]) / 2.0
     } else {
         sorted[midpoint]
