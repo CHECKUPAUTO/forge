@@ -112,7 +112,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         rtol,
     )?;
     if !baseline_verification.passed || !candidate_verification.passed {
-        return Err("RMSNorm paired requalification requires both launch variants to verify".into());
+        return Err(
+            "RMSNorm paired requalification requires both launch variants to verify".into(),
+        );
     }
 
     let mut expected_metadata: Option<BenchmarkMetadata> = None;
