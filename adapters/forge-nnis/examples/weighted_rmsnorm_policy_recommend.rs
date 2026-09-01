@@ -40,11 +40,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     validate_thresholds(min_relative_improvement, min_non_tie_win_fraction)?;
 
     let value: Value = serde_json::from_str(&fs::read_to_string(path)?)?;
-    let recommendation = reduce_campaign(
-        &value,
-        min_relative_improvement,
-        min_non_tie_win_fraction,
-    )?;
+    let recommendation =
+        reduce_campaign(&value, min_relative_improvement, min_non_tie_win_fraction)?;
     println!("{}", serde_json::to_string_pretty(&recommendation)?);
     Ok(())
 }
