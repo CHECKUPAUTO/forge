@@ -1,0 +1,92 @@
+schema_version: 1
+kind: forge_nnis_rmsnorm_policy_qualification
+status: active
+last_updated: "2026-09-01"
+merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
+
+scope:
+  operation: canonical_f32_rmsnorm
+  baseline_block_size: 256
+  candidate_block_size: 512
+  epsilon: 9.999999974752427e-7
+  gamma: 1.0
+  atol: 0.00005
+  rtol: 0.00005
+  policy_min_relative_improvement: 0.03
+  policy_min_round_win_fraction: 1.0
+
+primary_shape_matrix:
+  result: passed
+  forge_commit: e37260fdc89b2c6c525e55ed10cf82480f701a71
+  run_context_id: ka5-rmsnorm-matrix-thor-20260901T105650Z
+  hardware:
+    platform_model: NVIDIA Jetson AGX Thor Developer Kit
+    gpu_name: NVIDIA Thor
+    compute_capability: "11.0"
+    gpu_uuid: a7c66ad2-6dbb-0ab8-c1a2-37ba6dba3600
+    driver_version: "13.0"
+    nvrtc_version: "13.0"
+    host_arch: aarch64
+    host_kernel_release: 6.8.12-tegra
+    jetson_power_mode: MAXN
+  experiment:
+    shape_count: 16
+    rounds_per_shape: 4
+    warmup_iterations_per_observation: 20
+    measured_iterations_per_observation: 100
+  raw_outcome:
+    candidate_shape_wins: 13
+    baseline_shape_wins: 2
+    shape_ties: 1
+
+primary_policy_reduction:
+  result: passed
+  reducer_pull_request: 18
+  reducer_merge_commit: 26b5a60b01259ea21e71ea58f40bd1dc0a723dbc
+  source_run_context_id: ka5-rmsnorm-matrix-thor-20260901T105650Z
+  candidate_recommendations: 12
+  baseline_recommendations: 0
+  inconclusive: 4
+  candidate_preferred_shapes:
+    - [1, 2048]
+    - [1, 4096]
+    - [1, 5120]
+    - [1, 8192]
+    - [8, 2048]
+    - [8, 4096]
+    - [8, 5120]
+    - [8, 8192]
+    - [32, 4096]
+    - [32, 5120]
+    - [32, 8192]
+    - [128, 8192]
+  inconclusive_shapes:
+    - [32, 2048]
+    - [128, 2048]
+    - [128, 4096]
+    - [128, 5120]
+
+inter_run_consensus_gate:
+  implementation_result: passed
+  pull_request: 19
+  exact_head_ci: 4c3ab74b5f4b8a02443119aeb0294dd3fc38d6bf
+  merge_commit: 807b42dc17e623d1c96030b2266ed679bc538dd8
+  minimum_independent_runs: 2
+  status: awaiting_second_independent_hardware_run
+  fail_closed_requirements:
+    - distinct_run_context_ids
+    - identical_source_campaign_semantics
+    - identical_block_sizes
+    - identical_shape_sets
+    - identical_round_counts
+    - identical_policy_thresholds
+    - recompute_each_policy_decision_from_threshold_inputs
+    - unanimous_candidate_or_baseline_preference_required
+    - disagreement_becomes_inconclusive
+
+claim_boundary: >-
+  The current evidence qualifies one real-hardware RMSNorm microbenchmark campaign
+  and its fail-closed policy reduction. It does not yet establish repeatability,
+  authorize an NNIS runtime policy, or imply end-to-end model speedup. A second
+  independent hardware run and consensus are required before destination-owned
+  NNIS promotion can be considered.
