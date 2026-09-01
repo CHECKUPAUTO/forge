@@ -45,10 +45,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .filter(|value| !value.trim().is_empty())
         .ok_or("NNIS_BENCH_RUN_CONTEXT_ID must be set for fail-closed benchmark evidence")?;
     let warmups = env_usize("FORGE_NNIS_WEIGHTED_RMSNORM_WARMUPS", DEFAULT_WARMUPS)?;
-    let iterations = env_usize(
-        "FORGE_NNIS_WEIGHTED_RMSNORM_ITERATIONS",
-        DEFAULT_ITERATIONS,
-    )?;
+    let iterations = env_usize("FORGE_NNIS_WEIGHTED_RMSNORM_ITERATIONS", DEFAULT_ITERATIONS)?;
     let rounds = env_usize("FORGE_NNIS_WEIGHTED_RMSNORM_ROUNDS", DEFAULT_ROUNDS)?;
     let atol = env_f64("FORGE_NNIS_WEIGHTED_RMSNORM_ATOL", DEFAULT_ATOL)?;
     let rtol = env_f64("FORGE_NNIS_WEIGHTED_RMSNORM_RTOL", DEFAULT_RTOL)?;
@@ -65,8 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let stream = Stream::new(&context)?;
     let compiler = JitCompiler::new();
     let baseline = F32DecoderKernels::load(&context, &compiler)?;
-    let candidate =
-        F32WeightedRmsNormCandidate::load(&context, &compiler, CANDIDATE_BLOCK_SIZE)?;
+    let candidate = F32WeightedRmsNormCandidate::load(&context, &compiler, CANDIDATE_BLOCK_SIZE)?;
 
     let input_host = deterministic_input(COLS);
     let weight_host = deterministic_weight(COLS);
@@ -170,8 +166,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let baseline_median_ms = positive_median(&baseline_report)?;
         let candidate_median_ms = positive_median(&candidate_report)?;
-        let relative_improvement =
-            (baseline_median_ms - candidate_median_ms) / baseline_median_ms;
+        let relative_improvement = (baseline_median_ms - candidate_median_ms) / baseline_median_ms;
         match candidate_median_ms.total_cmp(&baseline_median_ms) {
             std::cmp::Ordering::Less => candidate_round_wins += 1,
             std::cmp::Ordering::Greater => baseline_round_wins += 1,
@@ -375,15 +370,7 @@ fn verify_baseline(
     atol: f64,
     rtol: f64,
 ) -> Result<VerificationSummary, Box<dyn Error>> {
-    baseline.weighted_rms_norm(
-        stream,
-        input,
-        weight,
-        output,
-        ROWS,
-        COLS,
-        RMS_NORM_EPSILON,
-    )?;
+    baseline.weighted_rms_norm(stream, input, weight, output, ROWS, COLS, RMS_NORM_EPSILON)?;
     verify_output(stream, output, input_host, weight_host, atol, rtol)
 }
 
@@ -399,15 +386,7 @@ fn verify_candidate(
     atol: f64,
     rtol: f64,
 ) -> Result<VerificationSummary, Box<dyn Error>> {
-    candidate.weighted_rms_norm(
-        stream,
-        input,
-        weight,
-        output,
-        ROWS,
-        COLS,
-        RMS_NORM_EPSILON,
-    )?;
+    candidate.weighted_rms_norm(stream, input, weight, output, ROWS, COLS, RMS_NORM_EPSILON)?;
     verify_output(stream, output, input_host, weight_host, atol, rtol)
 }
 
@@ -421,7 +400,12 @@ fn verify_output(
 ) -> Result<VerificationSummary, Box<dyn Error>> {
     let actual = output.to_vec(stream)?;
     Ok(verify_weighted_rmsnorm(
-        input, weight, &actual, RMS_NORM_EPSILON, atol, rtol,
+        input,
+        weight,
+        &actual,
+        RMS_NORM_EPSILON,
+        atol,
+        rtol,
     ))
 }
 
@@ -546,14 +530,8 @@ mod tests {
         let weight = vec![2.0_f32; COLS];
         let scale = 1.0_f64 / (0.25_f64 + f64::from(RMS_NORM_EPSILON)).sqrt();
         let actual = vec![(0.5_f64 * scale * 2.0) as f32; COLS];
-        let verification = verify_weighted_rmsnorm(
-            &input,
-            &weight,
-            &actual,
-            RMS_NORM_EPSILON,
-            1.0e-6,
-            1.0e-6,
-        );
+        let verification =
+            verify_weighted_rmsnorm(&input, &weight, &actual, RMS_NORM_EPSILON, 1.0e-6, 1.0e-6);
         assert!(verification.passed);
     }
 
@@ -562,15 +540,10 @@ mod tests {
         let input = vec![0.5_f32; COLS];
         let weight = vec![1.0_f32; COLS];
         let actual = vec![0.0_f32; COLS];
-        assert!(!verify_weighted_rmsnorm(
-            &input,
-            &weight,
-            &actual,
-            RMS_NORM_EPSILON,
-            1.0e-6,
-            1.0e-6,
-        )
-        .passed);
+        assert!(
+            !verify_weighted_rmsnorm(&input, &weight, &actual, RMS_NORM_EPSILON, 1.0e-6, 1.0e-6,)
+                .passed
+        );
     }
 
     #[test]
