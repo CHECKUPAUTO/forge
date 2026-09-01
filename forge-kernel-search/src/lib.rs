@@ -78,16 +78,25 @@ pub trait KernelMutator {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CandidateRejection {
-    MutationFailed { message: String },
-    EvaluationFailed { message: String },
+    MutationFailed {
+        message: String,
+    },
+    EvaluationFailed {
+        message: String,
+    },
     VerificationFailed,
     MissingMeasurement,
     IncompatibleEnvironment {
         baseline_environment_id: String,
         candidate_environment_id: String,
     },
-    MissingPrimaryMetric { metric: String },
-    InvalidPrimaryMetric { metric: String, value: f64 },
+    MissingPrimaryMetric {
+        metric: String,
+    },
+    InvalidPrimaryMetric {
+        metric: String,
+        value: f64,
+    },
     NotBetterThanBaseline {
         baseline_value: f64,
         candidate_value: f64,
@@ -153,6 +162,7 @@ where
     if !baseline_evaluation.verification.passed {
         return Err(CampaignError::BaselineRejected);
     }
+
     let baseline_measurement = baseline_evaluation
         .measurement
         .as_ref()
@@ -192,6 +202,7 @@ where
                 }
             };
             let candidate_id = candidate.id;
+
             let evaluation = match evaluate_candidate(backend, task, &candidate) {
                 Ok(evaluation) => evaluation,
                 Err(error) => {
@@ -236,7 +247,7 @@ where
                 continue;
             };
 
-            if measurement.environment_id != baseline_environment_id {
+            if measurement.environment_id.as_str() != baseline_environment_id.as_str() {
                 attempts.push(CandidateAttempt {
                     generation,
                     ordinal,
@@ -268,6 +279,7 @@ where
                 }
             };
             let candidate_score = Score::valid(vec![candidate_metric]);
+
             if !candidate_score.dominates(&baseline_score) {
                 attempts.push(CandidateAttempt {
                     generation,
@@ -325,13 +337,12 @@ fn metric_value(
     measurement: &MeasurementEvidence,
     metric: &str,
 ) -> Result<f64, CandidateRejection> {
-    let value = measurement
-        .metrics
-        .get(metric)
-        .copied()
-        .ok_or_else(|| CandidateRejection::MissingPrimaryMetric {
+    let value = measurement.metrics.get(metric).copied().ok_or_else(|| {
+        CandidateRejection::MissingPrimaryMetric {
             metric: metric.to_string(),
-        })?;
+        }
+    })?;
+
     if !value.is_finite() || value < 0.0 {
         return Err(CandidateRejection::InvalidPrimaryMetric {
             metric: metric.to_string(),
@@ -370,7 +381,10 @@ impl Display for CampaignError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UnsupportedSchema(version) => {
-                write!(formatter, "unsupported kernel campaign schema version {version}")
+                write!(
+                    formatter,
+                    "unsupported kernel campaign schema version {version}"
+                )
             }
             Self::InvalidConfig(message) => write!(formatter, "invalid campaign config: {message}"),
             Self::InvalidTask(message) => write!(formatter, "invalid campaign task: {message}"),
@@ -382,7 +396,10 @@ impl Display for CampaignError {
                 write!(formatter, "baseline has no measurement evidence")
             }
             Self::BaselineMetric(rejection) => {
-                write!(formatter, "baseline primary metric is unusable: {rejection:?}")
+                write!(
+                    formatter,
+                    "baseline primary metric is unusable: {rejection:?}"
+                )
             }
         }
     }
@@ -479,9 +496,10 @@ mod tests {
             _ordinal: u32,
             _parent: &KernelCandidate,
         ) -> Result<KernelCandidate, Self::Error> {
-            let source = self.script.get(self.cursor).copied().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::UnexpectedEof, "script exhausted")
-            })?;
+            let source =
+                self.script.get(self.cursor).copied().ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "script exhausted")
+                })?;
             self.cursor += 1;
             Ok(KernelCandidate::new(KernelSourceLanguage::CudaCpp, source))
         }
