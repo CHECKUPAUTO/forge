@@ -24,7 +24,7 @@ enum PairOrder {
 
 impl PairOrder {
     fn for_round(round: usize) -> Self {
-        if round % 2 == 0 {
+        if round.is_multiple_of(2) {
             Self::BaselineThenCandidate
         } else {
             Self::CandidateThenBaseline
@@ -305,7 +305,7 @@ fn measure<F>(
     stream: &Stream,
     bytes_per_iteration: u64,
     bench_config: BenchConfig,
-    mut operation: F,
+    operation: F,
 ) -> Result<BenchmarkReport, Box<dyn Error>>
 where
     F: FnMut() -> nnis_rt::Result<()>,
@@ -316,7 +316,7 @@ where
         .with_dimension("block_size", u64::from(block_size))
         .with_work_items((ROWS * COLS) as u64)
         .with_bytes_per_iteration(bytes_per_iteration);
-    let report = benchmark_gpu(context, stream, case, bench_config, || operation())?;
+    let report = benchmark_gpu(context, stream, case, bench_config, operation)?;
     report
         .metadata
         .require_compatible_environment(&report.metadata)?;
@@ -490,7 +490,7 @@ fn median(values: &[f64]) -> Result<f64, Box<dyn Error>> {
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
     let midpoint = sorted.len() / 2;
-    Ok(if sorted.len() % 2 == 0 {
+    Ok(if sorted.len().is_multiple_of(2) {
         (sorted[midpoint - 1] + sorted[midpoint]) / 2.0
     } else {
         sorted[midpoint]
