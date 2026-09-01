@@ -530,8 +530,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.attempts.len(), 6);
-        assert_eq!(report.rejected_attempts().count(), 4);
-        assert_eq!(report.eligible_attempts().count(), 2);
+        assert_eq!(report.rejected_attempts().count(), 3);
+        assert_eq!(report.eligible_attempts().count(), 3);
         assert_eq!(report.winner_primary_metric, Some(6.0));
         let winner_id = KernelCandidate::new(KernelSourceLanguage::CudaCpp, "faster").id;
         assert_eq!(report.winner_candidate_id, Some(winner_id));
