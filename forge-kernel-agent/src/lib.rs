@@ -578,7 +578,10 @@ mod tests {
             .with_launch_policy(KernelLaunchPolicy::block_x(256));
         assert_ne!(baseline.id, block_128.id);
         assert_ne!(block_128.id, block_256.id);
-        assert_eq!(baseline.id, KernelCandidate::new(KernelSourceLanguage::CudaCpp, "same source").id);
+        assert_eq!(
+            baseline.id,
+            KernelCandidate::new(KernelSourceLanguage::CudaCpp, "same source").id
+        );
     }
 
     #[test]
