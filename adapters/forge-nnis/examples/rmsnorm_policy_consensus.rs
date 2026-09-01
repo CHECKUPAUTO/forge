@@ -86,10 +86,7 @@ struct ParsedPolicy {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let paths = std::env::args().skip(1).collect::<Vec<_>>();
-    let min_runs = env_usize(
-        "FORGE_NNIS_RMSNORM_CONSENSUS_MIN_RUNS",
-        DEFAULT_MIN_RUNS,
-    )?;
+    let min_runs = env_usize("FORGE_NNIS_RMSNORM_CONSENSUS_MIN_RUNS", DEFAULT_MIN_RUNS)?;
     if min_runs < 2 {
         return Err("FORGE_NNIS_RMSNORM_CONSENSUS_MIN_RUNS must be at least 2".into());
     }
@@ -137,10 +134,7 @@ fn parse_policy(value: &Value, label: &str) -> ConsensusResult<ParsedPolicy> {
 
     let threshold_object = object_field(root, "thresholds")?;
     let thresholds = Thresholds {
-        min_relative_improvement: finite_f64(
-            threshold_object,
-            "min_relative_improvement",
-        )?,
+        min_relative_improvement: finite_f64(threshold_object, "min_relative_improvement")?,
         min_round_win_fraction: finite_f64(threshold_object, "min_round_win_fraction")?,
     };
     validate_thresholds(thresholds, label)?;
@@ -153,10 +147,7 @@ fn parse_policy(value: &Value, label: &str) -> ConsensusResult<ParsedPolicy> {
         nonnegative_u64(root, "baseline_recommendations")?,
         "baseline_recommendations",
     )?;
-    let declared_inconclusive = to_usize(
-        nonnegative_u64(root, "inconclusive")?,
-        "inconclusive",
-    )?;
+    let declared_inconclusive = to_usize(nonnegative_u64(root, "inconclusive")?, "inconclusive")?;
     if declared_candidate + declared_baseline + declared_inconclusive != shape_count {
         return Err(ConsensusError(format!(
             "{label}: declared recommendation counts do not sum to shape_count"
@@ -207,19 +198,11 @@ fn parse_policy(value: &Value, label: &str) -> ConsensusResult<ParsedPolicy> {
         match decision {
             Decision::CandidatePreferred => {
                 observed[0] += 1;
-                require_block(
-                    recommended_block_size,
-                    candidate_block_size,
-                    &entry_label,
-                )?;
+                require_block(recommended_block_size, candidate_block_size, &entry_label)?;
             }
             Decision::BaselinePreferred => {
                 observed[1] += 1;
-                require_block(
-                    recommended_block_size,
-                    baseline_block_size,
-                    &entry_label,
-                )?;
+                require_block(recommended_block_size, baseline_block_size, &entry_label)?;
             }
             Decision::Inconclusive => {
                 observed[2] += 1;
@@ -450,7 +433,10 @@ fn as_object<'a>(value: &'a Value, label: &str) -> ConsensusResult<&'a Map<Strin
         .ok_or_else(|| ConsensusError(format!("{label} must be a JSON object")))
 }
 
-fn object_field<'a>(object: &'a Map<String, Value>, field: &str) -> ConsensusResult<&'a Map<String, Value>> {
+fn object_field<'a>(
+    object: &'a Map<String, Value>,
+    field: &str,
+) -> ConsensusResult<&'a Map<String, Value>> {
     object
         .get(field)
         .and_then(Value::as_object)
@@ -644,10 +630,7 @@ mod tests {
     #[test]
     fn mismatched_thresholds_fail_closed() {
         let first = parsed("run-a", rec(1, 4096, "candidate_preferred", 0.20));
-        let mut value = policy(
-            "run-b",
-            vec![rec(1, 4096, "candidate_preferred", 0.20)],
-        );
+        let mut value = policy("run-b", vec![rec(1, 4096, "candidate_preferred", 0.20)]);
         value["thresholds"]["min_relative_improvement"] = json!(0.04);
         let second = parse_policy(&value, "run-b").unwrap();
         assert!(build_consensus(&[first, second], 2).is_err());
@@ -655,10 +638,7 @@ mod tests {
 
     #[test]
     fn forged_decision_fails_closed() {
-        let value = policy(
-            "run-a",
-            vec![rec(32, 2048, "candidate_preferred", 0.008)],
-        );
+        let value = policy("run-a", vec![rec(32, 2048, "candidate_preferred", 0.008)]);
         assert!(parse_policy(&value, "run-a").is_err());
     }
 
