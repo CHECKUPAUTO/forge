@@ -13,6 +13,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 pub const KERNEL_TASK_SCHEMA_VERSION: u32 = 1;
+pub const KERNEL_LAUNCH_POLICY_SCHEMA_VERSION: u32 = 1;
 pub const NUMERICAL_CONTRACT_SCHEMA_VERSION: u32 = 1;
 pub const VERIFICATION_EVIDENCE_SCHEMA_VERSION: u32 = 1;
 pub const MEASUREMENT_EVIDENCE_SCHEMA_VERSION: u32 = 1;
@@ -23,23 +24,96 @@ pub enum KernelSourceLanguage {
     Ptx,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KernelLaunchPolicy {
+    pub schema_version: u32,
+    pub block: [u32; 3],
+    pub dynamic_shared_memory_bytes: u32,
+}
+
+impl KernelLaunchPolicy {
+    pub const fn block_x(block_x: u32) -> Self {
+        Self {
+            schema_version: KERNEL_LAUNCH_POLICY_SCHEMA_VERSION,
+            block: [block_x, 1, 1],
+            dynamic_shared_memory_bytes: 0,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if self.schema_version != KERNEL_LAUNCH_POLICY_SCHEMA_VERSION {
+            return Err(ContractError::UnsupportedSchema {
+                kind: "kernel_launch_policy",
+                version: self.schema_version,
+            });
+        }
+        if self.block.contains(&0) {
+            return Err(ContractError::InvalidNumericField("launch_block"));
+        }
+        Ok(())
+    }
+
+    fn identity_fragment(self) -> String {
+        format!(
+            "launch-v{}:{}:{}:{}:{}",
+            self.schema_version,
+            self.block[0],
+            self.block[1],
+            self.block[2],
+            self.dynamic_shared_memory_bytes
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KernelCandidate {
     pub source_language: KernelSourceLanguage,
     pub source: String,
+    #[serde(default)]
+    pub launch_policy: Option<KernelLaunchPolicy>,
     pub id: CandidateId,
 }
 
 impl KernelCandidate {
     pub fn new(source_language: KernelSourceLanguage, source: impl Into<String>) -> Self {
         let source = source.into();
-        let identity = format!("{:?}\0{}", source_language, source);
+        let id = candidate_id(&source_language, &source, None);
         Self {
             source_language,
             source,
-            id: fnv1a(&identity),
+            launch_policy: None,
+            id,
         }
     }
+
+    pub fn with_launch_policy(mut self, launch_policy: KernelLaunchPolicy) -> Self {
+        self.launch_policy = Some(launch_policy);
+        self.id = candidate_id(&self.source_language, &self.source, self.launch_policy);
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), ContractError> {
+        if let Some(policy) = self.launch_policy {
+            policy.validate()?;
+        }
+        if self.id != candidate_id(&self.source_language, &self.source, self.launch_policy) {
+            return Err(ContractError::InvalidField("candidate_id"));
+        }
+        Ok(())
+    }
+}
+
+fn candidate_id(
+    source_language: &KernelSourceLanguage,
+    source: &str,
+    launch_policy: Option<KernelLaunchPolicy>,
+) -> CandidateId {
+    let mut identity = format!("{source_language:?}\0{source}");
+    if let Some(policy) = launch_policy {
+        identity.push('\0');
+        identity.push_str(&policy.identity_fragment());
+    }
+    fnv1a(&identity)
 }
 
 impl Candidate for KernelCandidate {
@@ -284,6 +358,7 @@ pub fn evaluate_candidate<B: KernelBackend>(
     candidate: &KernelCandidate,
 ) -> Result<KernelEvaluation, EvaluationError<B::Error>> {
     task.validate().map_err(EvaluationError::Contract)?;
+    candidate.validate().map_err(EvaluationError::Contract)?;
     let (artifact, compile) = backend
         .compile(task, candidate)
         .map_err(EvaluationError::Backend)?;
@@ -490,5 +565,29 @@ mod tests {
         let cuda = KernelCandidate::new(KernelSourceLanguage::CudaCpp, source);
         let ptx = KernelCandidate::new(KernelSourceLanguage::Ptx, source);
         assert_ne!(cuda.id, ptx.id);
+    }
+
+    #[test]
+    fn candidate_identity_changes_with_launch_policy() {
+        let baseline = KernelCandidate::new(KernelSourceLanguage::CudaCpp, "same source");
+        let block_128 = baseline
+            .clone()
+            .with_launch_policy(KernelLaunchPolicy::block_x(128));
+        let block_256 = baseline
+            .clone()
+            .with_launch_policy(KernelLaunchPolicy::block_x(256));
+        assert_ne!(baseline.id, block_128.id);
+        assert_ne!(block_128.id, block_256.id);
+        assert_eq!(baseline.id, KernelCandidate::new(KernelSourceLanguage::CudaCpp, "same source").id);
+    }
+
+    #[test]
+    fn launch_policy_rejects_zero_axis() {
+        let candidate = KernelCandidate::new(KernelSourceLanguage::CudaCpp, "kernel")
+            .with_launch_policy(KernelLaunchPolicy::block_x(0));
+        assert_eq!(
+            candidate.validate(),
+            Err(ContractError::InvalidNumericField("launch_block"))
+        );
     }
 }
