@@ -117,7 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             std::cmp::Ordering::Greater => baseline_shape_wins += 1,
             std::cmp::Ordering::Equal => shape_ties += 1,
         }
-        shape_results.push(result.to_json());
+        shape_results.push(result.into_json());
     }
 
     let result = json!({
@@ -161,7 +161,7 @@ struct ShapeResult {
 }
 
 impl ShapeResult {
-    fn to_json(self) -> Value {
+    fn into_json(self) -> Value {
         json!({
             "rows": self.shape.rows,
             "cols": self.shape.cols,
