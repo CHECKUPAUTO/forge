@@ -213,10 +213,7 @@ impl ExternalDomainManifestV1 {
     }
 }
 
-fn require_nonempty(
-    value: &str,
-    field: &'static str,
-) -> Result<(), ExternalDomainManifestError> {
+fn require_nonempty(value: &str, field: &'static str) -> Result<(), ExternalDomainManifestError> {
     if value.trim().is_empty() {
         Err(ExternalDomainManifestError::EmptyField(field))
     } else {
@@ -264,10 +261,7 @@ fn validate_commit_id(value: &str) -> Result<(), ExternalDomainManifestError> {
     }
 }
 
-fn validate_sha256(
-    value: &str,
-    field: &'static str,
-) -> Result<(), ExternalDomainManifestError> {
+fn validate_sha256(value: &str, field: &'static str) -> Result<(), ExternalDomainManifestError> {
     if value.len() == 64 && is_lower_hex(value) {
         Ok(())
     } else {

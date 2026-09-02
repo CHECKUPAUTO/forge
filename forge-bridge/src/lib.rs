@@ -17,9 +17,9 @@ pub use candidate_envelope::{
     CandidateEnvelopeError, CandidateEnvelopeV1, CANDIDATE_ENVELOPE_SCHEMA_VERSION,
 };
 pub use external_domain::{
-    DataBoundaryV1, EnvironmentPolicyV1, EXTERNAL_DOMAIN_MANIFEST_SCHEMA_VERSION,
-    ExternalDomainManifestError, ExternalDomainManifestV1, ObjectiveDirection, ObjectiveSpecV1,
-    UpstreamContractRefV1, VerificationBindingV1,
+    DataBoundaryV1, EnvironmentPolicyV1, ExternalDomainManifestError, ExternalDomainManifestV1,
+    ObjectiveDirection, ObjectiveSpecV1, UpstreamContractRefV1, VerificationBindingV1,
+    EXTERNAL_DOMAIN_MANIFEST_SCHEMA_VERSION,
 };
 
 pub type ForgeConfig = Config;
