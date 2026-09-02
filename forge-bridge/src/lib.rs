@@ -10,10 +10,16 @@ use tracing::info;
 
 pub mod binpack_demo;
 pub mod candidate_envelope;
+pub mod external_domain;
 pub mod llm_ollama;
 
 pub use candidate_envelope::{
     CandidateEnvelopeError, CandidateEnvelopeV1, CANDIDATE_ENVELOPE_SCHEMA_VERSION,
+};
+pub use external_domain::{
+    DataBoundaryV1, EnvironmentPolicyV1, ExternalDomainManifestError, ExternalDomainManifestV1,
+    ObjectiveDirection, ObjectiveSpecV1, UpstreamContractRefV1, VerificationBindingV1,
+    EXTERNAL_DOMAIN_MANIFEST_SCHEMA_VERSION,
 };
 
 pub type ForgeConfig = Config;
