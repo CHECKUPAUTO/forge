@@ -102,7 +102,10 @@ pub struct ProcessSoupEvaluator {
 }
 
 impl ProcessSoupEvaluator {
-    pub fn new(program: impl Into<PathBuf>, args: Vec<String>) -> std::result::Result<Self, String> {
+    pub fn new(
+        program: impl Into<PathBuf>,
+        args: Vec<String>,
+    ) -> std::result::Result<Self, String> {
         let program = program.into();
         if !program.is_absolute() {
             return Err("SOUP evaluator program path must be absolute".to_string());
@@ -273,7 +276,8 @@ impl<E: SoupEvaluator> SoupPostTrainDomain<E> {
         })?;
         if manifest.environment.isolation_required && !isolation_available {
             return Err(ForgeError::InvalidCandidate(
-                "SOUP domain requires external isolation but none was declared available".to_string(),
+                "SOUP domain requires external isolation but none was declared available"
+                    .to_string(),
             ));
         }
         validate_search_space(&manifest, &search)?;
@@ -421,9 +425,10 @@ impl<E: SoupEvaluator> Domain for SoupPostTrainDomain<E> {
         let dimensions: Vec<&String> = self.search.dimensions.keys().collect();
         let name = dimensions[rng.gen_range(0..dimensions.len())];
         let allowed = &self.search.dimensions[name];
-        candidate
-            .values
-            .insert(name.clone(), allowed[rng.gen_range(0..allowed.len())].clone());
+        candidate.values.insert(
+            name.clone(),
+            allowed[rng.gen_range(0..allowed.len())].clone(),
+        );
         Ok(candidate)
     }
 
@@ -495,8 +500,7 @@ fn validate_search_space(
         .iter()
         .map(String::as_str)
         .collect();
-    let search_dimensions: BTreeSet<&str> =
-        search.dimensions.keys().map(String::as_str).collect();
+    let search_dimensions: BTreeSet<&str> = search.dimensions.keys().map(String::as_str).collect();
     if manifest_dimensions != search_dimensions {
         return Err(ForgeError::InvalidCandidate(
             "SOUP search dimensions must exactly match external-domain allowed dimensions"
@@ -592,9 +596,8 @@ mod tests {
             upstream: UpstreamContractRefV1 {
                 repository: "MakazhanAlpamys/Soup".to_string(),
                 commit_id: "05b646523727925990530667e7012ede50bd30b2".to_string(),
-                contract_sha256:
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                        .to_string(),
+                contract_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    .to_string(),
             },
             allowed_candidate_dimensions: vec![
                 "recipe.learning_rate".to_string(),
@@ -607,9 +610,8 @@ mod tests {
             },
             verification: VerificationBindingV1 {
                 adapter_id: "scirust-hub/soup-eval-v1".to_string(),
-                adapter_sha256:
-                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-                        .to_string(),
+                adapter_sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .to_string(),
             },
             objectives: vec![
                 ObjectiveSpecV1 {
@@ -657,14 +659,18 @@ mod tests {
     fn executed_metrics_are_the_only_objective_source() {
         let evaluator = FakeEvaluator::default();
         let calls = evaluator.calls.clone();
-        let domain = SoupPostTrainDomain::new(manifest(), search_space(), evaluator, false).unwrap();
+        let domain =
+            SoupPostTrainDomain::new(manifest(), search_space(), evaluator, false).unwrap();
         let trial = Trial {
             generation: 2,
             seed: 7,
         };
         let candidate = search_space().baseline;
         assert!(domain.verify(&candidate, &trial).unwrap());
-        assert_eq!(domain.measure(&candidate, &trial).unwrap(), vec![-0.75, 1024.0, 50.0]);
+        assert_eq!(
+            domain.measure(&candidate, &trial).unwrap(),
+            vec![-0.75, 1024.0, 50.0]
+        );
         assert_eq!(*calls.lock().unwrap(), vec!["verify", "measure"]);
     }
 
@@ -672,14 +678,17 @@ mod tests {
     fn baseline_is_verified_before_measurement() {
         let evaluator = FakeEvaluator::default();
         let calls = evaluator.calls.clone();
-        let domain = SoupPostTrainDomain::new(manifest(), search_space(), evaluator, false).unwrap();
-        assert!(domain
-            .baseline(&Trial {
-                generation: 0,
-                seed: 11,
-            })
-            .unwrap()
-            .valid);
+        let domain =
+            SoupPostTrainDomain::new(manifest(), search_space(), evaluator, false).unwrap();
+        assert!(
+            domain
+                .baseline(&Trial {
+                    generation: 0,
+                    seed: 11,
+                })
+                .unwrap()
+                .valid
+        );
         assert_eq!(*calls.lock().unwrap(), vec!["verify", "measure"]);
     }
 
@@ -687,7 +696,9 @@ mod tests {
     fn manifest_search_space_and_isolation_fail_closed() {
         let mut search = search_space();
         search.dimensions.remove("recipe.lora_rank");
-        assert!(SoupPostTrainDomain::new(manifest(), search, FakeEvaluator::default(), false).is_err());
+        assert!(
+            SoupPostTrainDomain::new(manifest(), search, FakeEvaluator::default(), false).is_err()
+        );
 
         let mut contract = manifest();
         contract.environment.isolation_required = true;
@@ -702,13 +713,9 @@ mod tests {
 
     #[test]
     fn seed_and_mutation_stay_inside_declared_values() {
-        let domain = SoupPostTrainDomain::new(
-            manifest(),
-            search_space(),
-            FakeEvaluator::default(),
-            false,
-        )
-        .unwrap();
+        let domain =
+            SoupPostTrainDomain::new(manifest(), search_space(), FakeEvaluator::default(), false)
+                .unwrap();
         let mut rng = StdRng::seed_from_u64(42);
         let mut candidate = domain.seed(&mut rng);
         for _ in 0..100 {
@@ -744,7 +751,8 @@ mod tests {
             }
         }
 
-        let domain = SoupPostTrainDomain::new(manifest(), search_space(), BadEvaluator, false).unwrap();
+        let domain =
+            SoupPostTrainDomain::new(manifest(), search_space(), BadEvaluator, false).unwrap();
         let error = domain
             .verify(
                 &search_space().baseline,
