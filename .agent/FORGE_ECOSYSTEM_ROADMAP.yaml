@@ -1,7 +1,7 @@
 schema_version: 1
 kind: forge_ecosystem_agent_roadmap
 status: active
-last_updated: "2026-08-31"
+last_updated: "2026-09-03"
 repository: Memorithm/forge
 intended_consumer: autonomous_coding_agent
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
@@ -22,6 +22,8 @@ verified_current_facts:
   - forge_bridge_is_a_typed_Rust_facade_not_an_HTTP_service
   - existing_domains_include_simd_gemm_cuda_gemm_and_low_rank_compression
   - verify_is_separate_from_measure_in_the_Domain_contract
+  - SOUP_posttraining_search_boundary_is_published_through_forge_bridge_soup_posttrain
+  - SOUP_search_evidence_is_bound_to_candidate_trial_and_environment_and_metrics_are_not_fabricated_by_Forge
   - the_current_distributed_protocol_is_not_a_security_protocol_and_requires_a_trusted_boundary
   - generated_code_resource_limits_are_defense_in_depth_not_a_complete_hostile_code_sandbox
   - LLM_mutation_is_optional_and_executed_evidence_not_the_LLM_is_authoritative
@@ -53,6 +55,7 @@ ownership:
     - FLAT_ATTENTION_attention_correctness_or_kernel_public_contract
     - NNIS_model_runtime_kernel_or_representation_semantics
     - SLHAv2_KV_quality_or_tile_semantics
+    - SOUP_training_evaluation_model_loading_or_export_semantics
     - SciRust_Hub_registry_or_workflow_control_plane
     - SciRust_Verify_evidence_dossier_verdict_semantics
     - SciCapsule_trust_or_execution_product_semantics
@@ -74,6 +77,33 @@ ecosystem_interfaces:
     relationship: provider_of_candidate_domains_or_independent_oracles
     status: planned_versioned_domain_contracts
     rule: SciRust_scientific_correctness_remains_owned_by_SciRust
+  MakazhanAlpamys/Soup:
+    relationship: external_LLM_posttraining_candidate_and_measurement_provider
+    status: active_narrow_versioned_search_boundary
+    forge_pull_request: 25
+    final_exact_head: 77a19eb8bfc5deab47d479e8dd4e748e9d67f88e
+    merge_commit: 1385c71a541419f15a558a5e94bc8a4a60567a4a
+    required_CI: CI_156_success_on_final_exact_head
+    qualified_upstream_commit: 05b646523727925990530667e7012ede50bd30b2
+    contract:
+      - forge_bridge_soup_posttrain_uses_ExternalDomainManifestV1
+      - candidate_dimensions_are_explicit_and_contract_supplied
+      - independent_verify_evidence_precedes_measurement
+      - objective_metric_set_must_exactly_match_the_manifest
+      - candidate_and_trial_identity_are_revalidated
+      - environment_fingerprint_is_required_when_declared
+      - maximize_objectives_are_normalized_only_for_Forge_internal_minimization
+      - missing_required_external_isolation_fails_closed
+    must_not:
+      - fabricate_SOUP_quality_latency_VRAM_or_other_measurements
+      - treat_process_success_as_quality_verification
+      - hardcode_unqualified_SOUP_recipe_fields_as_domain_truth
+      - claim_ProcessSoupEvaluator_is_a_hostile_code_sandbox
+      - treat_SciRust_symbolic_equivalence_as_a_universal_SOUP_quality_metric
+    maturity_note: >-
+      This is a narrow published cross-product slice built on the already
+      versioned ExternalDomainManifestV1. It does not by itself mark FG1, FG2,
+      FG3, or the broader FG4 ecosystem-domain SDK phase complete.
   Memorithm/ElasticXxx:
     relationship: objective_invariant_and_runtime_plan_partner
     status: planned_versioned_bridge
@@ -145,6 +175,14 @@ roadmap:
   - id: FG4
     name: Versioned ecosystem domain SDK
     status: planned_after_FG1_FG3
+    completed_narrow_slices:
+      - id: FG4_SOUP_posttrain_external_domain_v1
+        status: complete
+        pull_request: 25
+        final_exact_head: 77a19eb8bfc5deab47d479e8dd4e748e9d67f88e
+        merge_commit: 1385c71a541419f15a558a5e94bc8a4a60567a4a
+        required_CI: CI_156_success_on_final_exact_head
+        note: does_not_promote_the_broader_FG4_phase_before_FG1_and_FG3_exit_gates
     goals:
       - make_domain_plugin_contract_easy_to_consume_from_other_Rust_repositories
       - separate_candidate_generation_representation_verify_measure_and_objective_surfaces
