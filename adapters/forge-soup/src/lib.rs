@@ -6,19 +6,22 @@
 //! objectives must come from executed evaluator evidence.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use forge_bridge::{ExternalDomainManifestV1, ObjectiveDirection};
 use forge_core::{fnv1a, Candidate, CandidateId, Domain, ForgeError, Result, Score, Trial};
 use rand::rngs::StdRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tempfile::NamedTempFile;
 
 pub const EVALUATOR_SCHEMA_VERSION: u16 = 1;
 pub const DEFAULT_MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+
+static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// One concrete SOUP recipe candidate. Keys are constrained by the external
 /// domain manifest and values by [`SoupSearchSpace`].
@@ -141,65 +144,30 @@ impl ProcessSoupEvaluator {
         &self,
         request: &SoupEvaluatorRequest,
     ) -> std::result::Result<T, String> {
-        let mut input = NamedTempFile::new().map_err(|error| format!("temp input: {error}"))?;
-        serde_json::to_writer(&mut input, request)
+        let mut input = ScratchFile::new("stdin")?;
+        serde_json::to_writer(&mut input.file, request)
             .map_err(|error| format!("serialize evaluator request: {error}"))?;
         input
+            .file
             .write_all(b"\n")
             .map_err(|error| format!("write evaluator request: {error}"))?;
         input
-            .as_file_mut()
+            .file
             .rewind()
             .map_err(|error| format!("rewind evaluator request: {error}"))?;
 
-        let mut stdout = NamedTempFile::new().map_err(|error| format!("temp stdout: {error}"))?;
-        let mut stderr = NamedTempFile::new().map_err(|error| format!("temp stderr: {error}"))?;
-
+        let mut stdout = ScratchFile::new("stdout")?;
+        let mut stderr = ScratchFile::new("stderr")?;
         let status = Command::new(&self.program)
             .args(&self.args)
-            .stdin(Stdio::from(
-                input
-                    .reopen()
-                    .map_err(|error| format!("reopen evaluator input: {error}"))?,
-            ))
-            .stdout(Stdio::from(
-                stdout
-                    .reopen()
-                    .map_err(|error| format!("reopen evaluator stdout: {error}"))?,
-            ))
-            .stderr(Stdio::from(
-                stderr
-                    .reopen()
-                    .map_err(|error| format!("reopen evaluator stderr: {error}"))?,
-            ))
+            .stdin(Stdio::from(input.reopen()?))
+            .stdout(Stdio::from(stdout.reopen()?))
+            .stderr(Stdio::from(stderr.reopen()?))
             .status()
             .map_err(|error| format!("start SOUP evaluator {:?}: {error}", self.program))?;
 
-        let stdout_size = stdout
-            .as_file()
-            .metadata()
-            .map_err(|error| format!("stat evaluator stdout: {error}"))?
-            .len();
-        let stderr_size = stderr
-            .as_file()
-            .metadata()
-            .map_err(|error| format!("stat evaluator stderr: {error}"))?
-            .len();
-        if stdout_size > self.max_response_bytes {
-            return Err(format!(
-                "SOUP evaluator stdout exceeded {} bytes",
-                self.max_response_bytes
-            ));
-        }
-        if stderr_size > self.max_response_bytes {
-            return Err(format!(
-                "SOUP evaluator stderr exceeded {} bytes",
-                self.max_response_bytes
-            ));
-        }
-
-        let stdout_bytes = read_temp(&mut stdout, self.max_response_bytes)?;
-        let stderr_bytes = read_temp(&mut stderr, self.max_response_bytes)?;
+        let stdout_bytes = stdout.read_bounded(self.max_response_bytes)?;
+        let stderr_bytes = stderr.read_bounded(self.max_response_bytes)?;
         if !status.success() {
             return Err(format!(
                 "SOUP evaluator exited with {status}: {}",
@@ -227,19 +195,78 @@ impl SoupEvaluator for ProcessSoupEvaluator {
     }
 }
 
-fn read_temp(file: &mut NamedTempFile, limit: u64) -> std::result::Result<Vec<u8>, String> {
-    file.as_file_mut()
-        .rewind()
-        .map_err(|error| format!("rewind evaluator output: {error}"))?;
-    let mut bytes = Vec::new();
-    file.as_file_mut()
-        .take(limit.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("read evaluator output: {error}"))?;
-    if bytes.len() as u64 > limit {
-        return Err(format!("evaluator output exceeded {limit} bytes"));
+struct ScratchFile {
+    path: PathBuf,
+    file: File,
+}
+
+impl ScratchFile {
+    fn new(role: &str) -> std::result::Result<Self, String> {
+        for _ in 0..64 {
+            let nonce = SCRATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "forge-soup-{}-{nonce}-{role}.tmp",
+                std::process::id()
+            ));
+            match OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(file) => return Ok(Self { path, file }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(format!("create evaluator scratch file: {error}")),
+            }
+        }
+        Err("could not allocate unique evaluator scratch file".to_string())
     }
-    Ok(bytes)
+
+    fn reopen(&self) -> std::result::Result<File, String> {
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&self.path)
+            .map_err(|error| format!("reopen evaluator scratch file: {error}"))
+    }
+
+    fn read_bounded(&mut self, limit: u64) -> std::result::Result<Vec<u8>, String> {
+        let size = self
+            .file
+            .metadata()
+            .map_err(|error| format!("stat evaluator output: {error}"))?
+            .len();
+        if size > limit {
+            return Err(format!("evaluator output exceeded {limit} bytes"));
+        }
+        self.file
+            .rewind()
+            .map_err(|error| format!("rewind evaluator output: {error}"))?;
+        let mut bytes = Vec::new();
+        self.file
+            .by_ref()
+            .take(limit.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("read evaluator output: {error}"))?;
+        if bytes.len() as u64 > limit {
+            return Err(format!("evaluator output exceeded {limit} bytes"));
+        }
+        Ok(bytes)
+    }
+}
+
+impl Drop for ScratchFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+struct EvidenceHeader<'a> {
+    schema_version: u16,
+    candidate_id: CandidateId,
+    trial_seed: u64,
+    evidence_id: &'a str,
+    environment_fingerprint: &'a str,
 }
 
 /// Forge search domain over a finite SOUP recipe space.
@@ -296,14 +323,19 @@ impl<E: SoupEvaluator> SoupPostTrainDomain<E> {
         Ok(())
     }
 
-    fn request(&self, candidate: &SoupRecipeCandidate, trial: &Trial, phase: &str) -> SoupEvaluatorRequest {
+    fn request(
+        &self,
+        candidate: &SoupRecipeCandidate,
+        trial: &Trial,
+        phase: &str,
+    ) -> SoupEvaluatorRequest {
         SoupEvaluatorRequest {
             schema_version: EVALUATOR_SCHEMA_VERSION,
             phase: phase.to_string(),
             domain_id: self.manifest.domain_id.clone(),
             candidate_id: candidate.id(),
             candidate: candidate.clone(),
-            generation: trial.generation as u64,
+            generation: trial.generation,
             trial_seed: trial.seed,
         }
     }
@@ -312,29 +344,26 @@ impl<E: SoupEvaluator> SoupPostTrainDomain<E> {
         &self,
         candidate: &SoupRecipeCandidate,
         trial: &Trial,
-        schema_version: u16,
-        candidate_id: CandidateId,
-        trial_seed: u64,
-        evidence_id: &str,
-        environment_fingerprint: &str,
+        header: EvidenceHeader<'_>,
     ) -> Result<()> {
-        if schema_version != EVALUATOR_SCHEMA_VERSION {
+        if header.schema_version != EVALUATOR_SCHEMA_VERSION {
             return Err(ForgeError::Evaluation(format!(
-                "unsupported SOUP evaluator schema {schema_version}"
+                "unsupported SOUP evaluator schema {}",
+                header.schema_version
             )));
         }
-        if candidate_id != candidate.id() || trial_seed != trial.seed {
+        if header.candidate_id != candidate.id() || header.trial_seed != trial.seed {
             return Err(ForgeError::Evaluation(
                 "SOUP evaluator evidence identity does not match candidate/trial".to_string(),
             ));
         }
-        if evidence_id.trim().is_empty() {
+        if header.evidence_id.trim().is_empty() {
             return Err(ForgeError::Evaluation(
                 "SOUP evaluator evidence_id must be non-empty".to_string(),
             ));
         }
         if self.manifest.environment.fingerprint_required
-            && environment_fingerprint.trim().is_empty()
+            && header.environment_fingerprint.trim().is_empty()
         {
             return Err(ForgeError::Evaluation(
                 "SOUP evaluator omitted required environment fingerprint".to_string(),
@@ -417,11 +446,13 @@ impl<E: SoupEvaluator> Domain for SoupPostTrainDomain<E> {
         self.validate_common_evidence(
             candidate,
             trial,
-            evidence.schema_version,
-            evidence.candidate_id,
-            evidence.trial_seed,
-            &evidence.evidence_id,
-            &evidence.environment_fingerprint,
+            EvidenceHeader {
+                schema_version: evidence.schema_version,
+                candidate_id: evidence.candidate_id,
+                trial_seed: evidence.trial_seed,
+                evidence_id: &evidence.evidence_id,
+                environment_fingerprint: &evidence.environment_fingerprint,
+            },
         )?;
         Ok(evidence.passed)
     }
@@ -436,11 +467,13 @@ impl<E: SoupEvaluator> Domain for SoupPostTrainDomain<E> {
         self.validate_common_evidence(
             candidate,
             trial,
-            evidence.schema_version,
-            evidence.candidate_id,
-            evidence.trial_seed,
-            &evidence.evidence_id,
-            &evidence.environment_fingerprint,
+            EvidenceHeader {
+                schema_version: evidence.schema_version,
+                candidate_id: evidence.candidate_id,
+                trial_seed: evidence.trial_seed,
+                evidence_id: &evidence.evidence_id,
+                environment_fingerprint: &evidence.environment_fingerprint,
+            },
         )?;
         self.measured_objectives(&evidence)
     }
@@ -519,6 +552,7 @@ mod tests {
         VerificationBindingV1, EXTERNAL_DOMAIN_MANIFEST_SCHEMA_VERSION,
     };
     use rand::SeedableRng;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone, Default)]
@@ -588,15 +622,15 @@ mod tests {
                         .to_string(),
             },
             objectives: vec![
-                ObjectiveSpecV1 {
+                forge_bridge::ObjectiveSpecV1 {
                     name: "task_score".to_string(),
                     direction: ObjectiveDirection::Maximize,
                 },
-                ObjectiveSpecV1 {
+                forge_bridge::ObjectiveSpecV1 {
                     name: "peak_vram_bytes".to_string(),
                     direction: ObjectiveDirection::Minimize,
                 },
-                ObjectiveSpecV1 {
+                forge_bridge::ObjectiveSpecV1 {
                     name: "wall_ms".to_string(),
                     direction: ObjectiveDirection::Minimize,
                 },
@@ -720,6 +754,7 @@ mod tests {
                     environment_fingerprint: "env".to_string(),
                 })
             }
+
             fn measure(
                 &self,
                 _request: &SoupEvaluatorRequest,
