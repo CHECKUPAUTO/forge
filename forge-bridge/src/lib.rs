@@ -12,6 +12,7 @@ pub mod binpack_demo;
 pub mod candidate_envelope;
 pub mod external_domain;
 pub mod llm_ollama;
+pub mod soup_posttrain;
 
 pub use candidate_envelope::{
     CandidateEnvelopeError, CandidateEnvelopeV1, CANDIDATE_ENVELOPE_SCHEMA_VERSION,
