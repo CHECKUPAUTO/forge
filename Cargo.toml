@@ -8,7 +8,6 @@ members = [
     "forge-worker",
     "forge-kernel-agent",
     "forge-kernel-search",
-    "adapters/forge-soup",
 ]
 resolver = "2"
 
