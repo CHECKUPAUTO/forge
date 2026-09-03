@@ -231,8 +231,7 @@ impl ScratchFile {
             .rewind()
             .map_err(|error| format!("rewind evaluator output: {error}"))?;
         let mut bytes = Vec::new();
-        self.file
-            .by_ref()
+        Read::by_ref(&mut self.file)
             .take(limit.saturating_add(1))
             .read_to_end(&mut bytes)
             .map_err(|error| format!("read evaluator output: {error}"))?;
