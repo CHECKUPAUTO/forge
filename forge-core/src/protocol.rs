@@ -18,11 +18,13 @@ use crate::error::{ForgeError, Result};
 use crate::tls::{connect_tls, parse_tls_endpoint};
 
 pub const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
+pub const WORKER_DESCRIPTOR_VERSION: u32 = 1;
 pub const BENCHMARK_PROTOCOL: &str = "forge.verify-then-measure.v1";
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct WorkerExecutionContext {
+    pub descriptor_version: u32,
     pub worker_id: String,
     pub toolchain: String,
     pub os: String,
@@ -44,6 +46,8 @@ pub struct EvaluationResult {
     pub protocol_version: u32,
     pub candidate_id: CandidateId,
     pub source_hash: u64,
+    pub trial_seed: u64,
+    pub generation: u64,
     pub domain: String,
     pub benchmark_protocol: String,
     pub execution_context: WorkerExecutionContext,
@@ -120,6 +124,18 @@ fn validate_result(
             result.source_hash
         )));
     }
+    if result.trial_seed != payload.seed {
+        return Err(ForgeError::Evaluation(format!(
+            "Réponse worker incohérente: trial_seed={} attendu={}",
+            result.trial_seed, payload.seed
+        )));
+    }
+    if result.generation != payload.generation {
+        return Err(ForgeError::Evaluation(format!(
+            "Réponse worker incohérente: generation={} attendu={}",
+            result.generation, payload.generation
+        )));
+    }
     if result.domain != expected_domain {
         return Err(ForgeError::Evaluation(format!(
             "Réponse worker incohérente: domain='{}' attendu='{expected_domain}'",
@@ -133,6 +149,12 @@ fn validate_result(
         )));
     }
     let context = &result.execution_context;
+    if context.descriptor_version != WORKER_DESCRIPTOR_VERSION {
+        return Err(ForgeError::Evaluation(format!(
+            "Réponse worker avec descripteur incompatible: {} attendu={WORKER_DESCRIPTOR_VERSION}",
+            context.descriptor_version
+        )));
+    }
     if context.worker_id.trim().is_empty()
         || context.toolchain.trim().is_empty()
         || context.os.trim().is_empty()
@@ -199,6 +221,7 @@ mod tests {
 
     fn context() -> WorkerExecutionContext {
         WorkerExecutionContext {
+            descriptor_version: WORKER_DESCRIPTOR_VERSION,
             worker_id: "test-worker".into(),
             toolchain: "rustc test".into(),
             os: "test-os".into(),
@@ -213,6 +236,8 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             candidate_id: payload.candidate_id,
             source_hash: fnv1a(&payload.source_code),
+            trial_seed: payload.seed,
+            generation: payload.generation,
             domain: domain.into(),
             benchmark_protocol: BENCHMARK_PROTOCOL.into(),
             execution_context: context(),
@@ -222,14 +247,23 @@ mod tests {
         }
     }
 
+    fn payload(
+        candidate_id: CandidateId,
+        source_code: &str,
+        seed: u64,
+        generation: u64,
+    ) -> EvaluationPayload {
+        EvaluationPayload {
+            candidate_id,
+            source_code: source_code.into(),
+            seed,
+            generation,
+        }
+    }
+
     #[test]
     fn test_payload_bincode_roundtrip() {
-        let payload = EvaluationPayload {
-            candidate_id: 0xABCD_1234,
-            source_code: "fn main() {}".into(),
-            seed: 42,
-            generation: 7,
-        };
+        let payload = payload(0xABCD_1234, "fn main() {}", 42, 7);
         let bytes = bincode::serialize(&payload).expect("sérialisation");
         let recovered: EvaluationPayload = bincode::deserialize(&bytes).expect("désérialisation");
         assert_eq!(recovered.candidate_id, payload.candidate_id);
@@ -240,27 +274,19 @@ mod tests {
 
     #[test]
     fn test_result_bincode_roundtrip() {
-        let payload = EvaluationPayload {
-            candidate_id: 12345,
-            source_code: "source".into(),
-            seed: 1,
-            generation: 2,
-        };
+        let payload = payload(12345, "source", 1, 2);
         let res = result_for(&payload, "test");
         let bytes = bincode::serialize(&res).expect("sérialisation");
         let recovered: EvaluationResult = bincode::deserialize(&bytes).expect("désérialisation");
         assert_eq!(recovered.execution_context, context());
+        assert_eq!(recovered.trial_seed, payload.seed);
+        assert_eq!(recovered.generation, payload.generation);
         assert_eq!(recovered.objectives, vec![42.0]);
     }
 
     #[test]
     fn test_dispatch_invalid_addr() {
-        let payload = EvaluationPayload {
-            candidate_id: 1,
-            source_code: "fn main() {}".into(),
-            seed: 0,
-            generation: 0,
-        };
+        let payload = payload(1, "fn main() {}", 0, 0);
         assert!(dispatch_evaluation_to_worker(
             "invalid-addr",
             &payload,
@@ -298,37 +324,46 @@ mod tests {
 
     #[test]
     fn dispatch_rejects_wrong_source_hash() {
-        let payload = EvaluationPayload {
-            candidate_id: 5,
-            source_code: "actual-source".into(),
-            seed: 1,
-            generation: 1,
-        };
+        let payload = payload(5, "actual-source", 1, 1);
         let mut result = result_for(&payload, "test");
         result.source_hash = 0;
         assert!(validate_result(&result, &payload, "test").is_err());
     }
 
     #[test]
+    fn dispatch_rejects_wrong_trial_seed() {
+        let payload = payload(5, "actual-source", 41, 7);
+        let mut result = result_for(&payload, "test");
+        result.trial_seed = 42;
+        assert!(validate_result(&result, &payload, "test").is_err());
+    }
+
+    #[test]
+    fn dispatch_rejects_wrong_generation() {
+        let payload = payload(5, "actual-source", 41, 7);
+        let mut result = result_for(&payload, "test");
+        result.generation = 6;
+        assert!(validate_result(&result, &payload, "test").is_err());
+    }
+
+    #[test]
     fn dispatch_rejects_wrong_domain() {
-        let payload = EvaluationPayload {
-            candidate_id: 6,
-            source_code: "actual-source".into(),
-            seed: 1,
-            generation: 1,
-        };
+        let payload = payload(6, "actual-source", 1, 1);
         let result = result_for(&payload, "wrong-domain");
         assert!(validate_result(&result, &payload, "expected-domain").is_err());
     }
 
     #[test]
+    fn dispatch_rejects_wrong_worker_descriptor_version() {
+        let payload = payload(7, "actual-source", 1, 1);
+        let mut result = result_for(&payload, "test");
+        result.execution_context.descriptor_version = WORKER_DESCRIPTOR_VERSION + 1;
+        assert!(validate_result(&result, &payload, "test").is_err());
+    }
+
+    #[test]
     fn dispatch_rejects_incomplete_execution_context() {
-        let payload = EvaluationPayload {
-            candidate_id: 7,
-            source_code: "actual-source".into(),
-            seed: 1,
-            generation: 1,
-        };
+        let payload = payload(7, "actual-source", 1, 1);
         let mut result = result_for(&payload, "test");
         result.execution_context.worker_id.clear();
         assert!(validate_result(&result, &payload, "test").is_err());
