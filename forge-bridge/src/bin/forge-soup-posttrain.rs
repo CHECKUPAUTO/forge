@@ -118,13 +118,13 @@ fn require_regular_non_symlink(path: &Path, role: &str) -> Result<(), String> {
 }
 
 fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("stat campaign {}: {error}", path.display()))?;
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("stat campaign {}: {error}", path.display()))?;
     if metadata.len() > limit {
         return Err(format!("campaign exceeds {limit} bytes"));
     }
-    let bytes = fs::read(path)
-        .map_err(|error| format!("read campaign {}: {error}", path.display()))?;
+    let bytes =
+        fs::read(path).map_err(|error| format!("read campaign {}: {error}", path.display()))?;
     if bytes.len() as u64 > limit {
         return Err(format!("campaign exceeds {limit} bytes"));
     }
@@ -134,7 +134,9 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
 fn write_atomic_regular(path: &Path, payload: &[u8]) -> Result<(), String> {
     if let Ok(metadata) = fs::symlink_metadata(path) {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err("output path, when present, must be a regular non-symlink file".to_string());
+            return Err(
+                "output path, when present, must be a regular non-symlink file".to_string(),
+            );
         }
     }
 
@@ -158,7 +160,10 @@ fn write_atomic_regular(path: &Path, payload: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("create temporary report {}: {error}", temp.display()))?;
     if let Err(error) = file.write_all(payload).and_then(|_| file.sync_all()) {
         let _ = fs::remove_file(&temp);
-        return Err(format!("write temporary report {}: {error}", temp.display()));
+        return Err(format!(
+            "write temporary report {}: {error}",
+            temp.display()
+        ));
     }
     drop(file);
     if let Err(error) = fs::rename(&temp, path) {
@@ -174,7 +179,9 @@ mod tests {
 
     #[test]
     fn args_require_explicit_process_bindings() {
-        let error = parse_args(Vec::<String>::new()).err().expect("missing args");
+        let error = parse_args(Vec::<String>::new())
+            .err()
+            .expect("missing args");
         assert!(error.contains("--campaign"));
 
         let parsed = parse_args([
