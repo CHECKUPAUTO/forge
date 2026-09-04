@@ -19,6 +19,7 @@ mission:
 verified_current_facts:
   - forge_core_contains_evolutionary_search_Pareto_holdout_cache_checkpoints_and_distributed_protocol_logic
   - forge_worker_provides_remote_candidate_evaluation
+  - distributed_protocol_v3_binds_worker_results_to_candidate_source_domain_benchmark_trial_seed_generation_environment_and_descriptor_version
   - forge_bridge_is_a_typed_Rust_facade_not_an_HTTP_service
   - existing_domains_include_simd_gemm_cuda_gemm_and_low_rank_compression
   - verify_is_separate_from_measure_in_the_Domain_contract
@@ -173,6 +174,24 @@ roadmap:
   - id: FG1
     name: Worker trust and result integrity
     status: active_priority
+    completed_narrow_slices:
+      - id: FG1_trial_result_binding_v3
+        status: complete
+        pull_request: 27
+        final_exact_head: 6053669358b39171631aca9741b514656f4dae61
+        merge_commit: 98b56dfb52acd7efa903b57fb9f0df0de65377a7
+        required_CI: CI_163_success_on_final_exact_head
+        contract:
+          - result_binds_candidate_id_and_source_hash
+          - result_binds_domain_and_benchmark_protocol
+          - result_binds_trial_seed_and_generation
+          - result_binds_complete_execution_context
+          - worker_descriptor_version_is_explicit_and_fail_closed
+        limitations:
+          - no_campaign_wide_replay_or_duplicate_registry_yet
+          - no_cryptographic_worker_attestation
+          - TLS_or_other_authenticated_trust_boundary_still_required_for_untrusted_networks
+        note: does_not_complete_FG1_or_FGML2
     goals:
       - version_worker_identity_and_capability_descriptor
       - add_authenticated_transport_or_explicit_authentication_layer
