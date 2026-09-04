@@ -125,7 +125,10 @@ fn spawn_worker() -> WorkerHandle {
     listener
         .set_nonblocking(true)
         .expect("set mock worker nonblocking");
-    let addr = listener.local_addr().expect("mock worker address").to_string();
+    let addr = listener
+        .local_addr()
+        .expect("mock worker address")
+        .to_string();
     let shutdown = Arc::new(AtomicBool::new(false));
     let worker_errors = Arc::new(Mutex::new(Vec::<String>::new()));
     let thread_shutdown = Arc::clone(&shutdown);
@@ -176,7 +179,10 @@ fn worker_result_echoes_exact_trial_identity() {
     let result = evaluate_stub(&payload);
     assert_eq!(result.trial_seed, payload.seed);
     assert_eq!(result.generation, payload.generation);
-    assert_eq!(result.execution_context.descriptor_version, WORKER_DESCRIPTOR_VERSION);
+    assert_eq!(
+        result.execution_context.descriptor_version,
+        WORKER_DESCRIPTOR_VERSION
+    );
 }
 
 #[test]
@@ -234,10 +240,7 @@ fn test_distributed_evolution_under_stress() {
     assert!(failure_sink.into_inner().expect("failure sink").is_empty());
 
     stop_worker(shutdown, worker_handle);
-    assert!(worker_errors
-        .lock()
-        .expect("worker errors")
-        .is_empty());
+    assert!(worker_errors.lock().expect("worker errors").is_empty());
 }
 
 #[test]
@@ -311,8 +314,5 @@ fn test_round_robin_distribution() {
     assert!(failure_sink.into_inner().expect("failure sink").is_empty());
 
     stop_worker(shutdown, worker_handle);
-    assert!(worker_errors
-        .lock()
-        .expect("worker errors")
-        .is_empty());
+    assert!(worker_errors.lock().expect("worker errors").is_empty());
 }

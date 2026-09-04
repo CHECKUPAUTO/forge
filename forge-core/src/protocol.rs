@@ -247,7 +247,12 @@ mod tests {
         }
     }
 
-    fn payload(candidate_id: CandidateId, source_code: &str, seed: u64, generation: u64) -> EvaluationPayload {
+    fn payload(
+        candidate_id: CandidateId,
+        source_code: &str,
+        seed: u64,
+        generation: u64,
+    ) -> EvaluationPayload {
         EvaluationPayload {
             candidate_id,
             source_code: source_code.into(),
