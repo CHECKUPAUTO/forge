@@ -19,7 +19,7 @@ use forge_core::domains::low_rank::{TensorCode, TensorTrainDomain};
 use forge_core::domains::simd_kernel::{SimdKernelCode, SimdKernelDomain};
 use forge_core::protocol::{
     EvaluationPayload, EvaluationResult, WorkerExecutionContext, BENCHMARK_PROTOCOL,
-    MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
+    MAX_MESSAGE_BYTES, PROTOCOL_VERSION, WORKER_DESCRIPTOR_VERSION,
 };
 use forge_core::{fnv1a, Domain, Trial};
 use serde::{de::DeserializeOwned, Serialize};
@@ -157,12 +157,13 @@ fn worker_execution_context(domain: &str) -> WorkerExecutionContext {
     let arch = std::env::consts::ARCH.to_string();
     let explicit_env = std::env::var("FORGE_WORKER_ENV").unwrap_or_default();
     let material = format!(
-        "forge-worker:{}|domain={domain}|protocol={PROTOCOL_VERSION}|benchmark={BENCHMARK_PROTOCOL}|os={os}|arch={arch}|hardware={hardware}|toolchain={toolchain}|env={explicit_env}",
+        "forge-worker:{}|descriptor={WORKER_DESCRIPTOR_VERSION}|domain={domain}|protocol={PROTOCOL_VERSION}|benchmark={BENCHMARK_PROTOCOL}|os={os}|arch={arch}|hardware={hardware}|toolchain={toolchain}|env={explicit_env}",
         env!("CARGO_PKG_VERSION")
     );
     let environment_fingerprint = format!("fnv1a64:{:016x}", fnv1a(&material));
 
     WorkerExecutionContext {
+        descriptor_version: WORKER_DESCRIPTOR_VERSION,
         worker_id,
         toolchain,
         os,
@@ -349,6 +350,8 @@ where
     let source_hash = fnv1a(&payload.source_code);
     let source_code = payload.source_code;
     let candidate_id = payload.candidate_id;
+    let trial_seed = payload.seed;
+    let generation = payload.generation;
     let response_domain = domain.name().to_string();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -358,6 +361,8 @@ where
             protocol_version: PROTOCOL_VERSION,
             candidate_id,
             source_hash,
+            trial_seed,
+            generation,
             domain: response_domain,
             benchmark_protocol: BENCHMARK_PROTOCOL.to_string(),
             execution_context: context,
@@ -390,6 +395,7 @@ mod tests {
     fn execution_context_is_non_empty_and_stable_within_process() {
         let first = worker_execution_context("test-domain");
         let second = worker_execution_context("test-domain");
+        assert_eq!(first.descriptor_version, WORKER_DESCRIPTOR_VERSION);
         assert!(!first.worker_id.is_empty());
         assert!(!first.hardware.is_empty());
         assert!(!first.toolchain.is_empty());
@@ -415,9 +421,12 @@ mod tests {
                     protocol_version: PROTOCOL_VERSION,
                     candidate_id: payload.candidate_id,
                     source_hash: fnv1a(&payload.source_code),
+                    trial_seed: payload.seed,
+                    generation: payload.generation,
                     domain: "test".into(),
                     benchmark_protocol: BENCHMARK_PROTOCOL.into(),
                     execution_context: WorkerExecutionContext {
+                        descriptor_version: WORKER_DESCRIPTOR_VERSION,
                         worker_id: "test".into(),
                         toolchain: "rustc test".into(),
                         os: "test".into(),
@@ -450,6 +459,8 @@ mod tests {
         .expect("join")
         .expect("dispatch");
         assert_eq!(client.candidate_id, 12);
+        assert_eq!(client.trial_seed, 1);
+        assert_eq!(client.generation, 2);
         server.await.expect("server");
     }
 }
