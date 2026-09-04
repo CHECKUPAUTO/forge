@@ -1,7 +1,7 @@
 schema_version: 1
 kind: forge_ecosystem_agent_roadmap
 status: active
-last_updated: "2026-09-03"
+last_updated: "2026-09-04"
 repository: Memorithm/forge
 intended_consumer: autonomous_coding_agent
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
@@ -23,6 +23,8 @@ verified_current_facts:
   - existing_domains_include_simd_gemm_cuda_gemm_and_low_rank_compression
   - verify_is_separate_from_measure_in_the_Domain_contract
   - SOUP_posttraining_search_boundary_is_published_through_forge_bridge_soup_posttrain
+  - SOUP_posttraining_process_runner_is_published_as_forge_soup_posttrain_local_v1
+  - SciRust_Hub_orchestrates_the_local_SOUP_search_runner_through_llm_optimize_forge_soup_1_0_0
   - SOUP_search_evidence_is_bound_to_candidate_trial_and_environment_and_metrics_are_not_fabricated_by_Forge
   - the_current_distributed_protocol_is_not_a_security_protocol_and_requires_a_trusted_boundary
   - generated_code_resource_limits_are_defense_in_depth_not_a_complete_hostile_code_sandbox
@@ -79,11 +81,16 @@ ecosystem_interfaces:
     rule: SciRust_scientific_correctness_remains_owned_by_SciRust
   MakazhanAlpamys/Soup:
     relationship: external_LLM_posttraining_candidate_and_measurement_provider
-    status: active_narrow_versioned_search_boundary
+    status: active_narrow_versioned_search_and_process_boundary
     forge_pull_request: 25
     final_exact_head: 77a19eb8bfc5deab47d479e8dd4e748e9d67f88e
     merge_commit: 1385c71a541419f15a558a5e94bc8a4a60567a4a
     required_CI: CI_156_success_on_final_exact_head
+    process_runner_pull_request: 26
+    process_runner_final_exact_head: dc3189591436da6e27734b2953e94eaad7057f1e
+    process_runner_merge_commit: 9e1f3fc568c176f401735c121780d9fbe6834f5d
+    process_runner_required_CI: CI_160_success_on_final_exact_head
+    process_runner_mode: local_only
     qualified_upstream_commit: 05b646523727925990530667e7012ede50bd30b2
     contract:
       - forge_bridge_soup_posttrain_uses_ExternalDomainManifestV1
@@ -94,16 +101,19 @@ ecosystem_interfaces:
       - environment_fingerprint_is_required_when_declared
       - maximize_objectives_are_normalized_only_for_Forge_internal_minimization
       - missing_required_external_isolation_fails_closed
+      - forge_soup_posttrain_process_runner_preserves_the_same_domain_contract
+      - process_runner_disables_distributed_workers_in_v1
     must_not:
       - fabricate_SOUP_quality_latency_VRAM_or_other_measurements
       - treat_process_success_as_quality_verification
       - hardcode_unqualified_SOUP_recipe_fields_as_domain_truth
       - claim_ProcessSoupEvaluator_is_a_hostile_code_sandbox
       - treat_SciRust_symbolic_equivalence_as_a_universal_SOUP_quality_metric
+      - claim_local_process_runner_as_FG1_FG2_FG3_or_FG6_completion
     maturity_note: >-
-      This is a narrow published cross-product slice built on the already
-      versioned ExternalDomainManifestV1. It does not by itself mark FG1, FG2,
-      FG3, or the broader FG4 ecosystem-domain SDK phase complete.
+      These are narrow published cross-product slices built on the already
+      versioned ExternalDomainManifestV1. They do not by themselves mark FG1,
+      FG2, FG3, FG6, or the broader FG4 ecosystem-domain SDK phase complete.
   Memorithm/ElasticXxx:
     relationship: objective_invariant_and_runtime_plan_partner
     status: planned_versioned_bridge
@@ -131,9 +141,22 @@ ecosystem_interfaces:
       - preserve_the_difference_between_search_score_and_verified_claim
   Memorithm/scirust-hub:
     relationship: orchestration_control_plane
-    status: planned
+    status: active_narrow_SOUP_campaign_orchestration_contract
+    published:
+      - capability: llm.optimize.forge_soup@1.0.0
+        hub_pull_request: 32
+        hub_final_exact_head: b2e96b674b3c93be8ed14b6ecc47b45cbc44c8fb
+        hub_merge_commit: 074cf2c6e00a0b142fe46d1558c8b32df9228859
+        hub_required_CI: CI_88_success_on_final_exact_head
+    contract:
+      - Hub_materializes_campaign_config_and_dataset_inputs_and_preserves_artifact_provenance
+      - Forge_owns_candidate_search_verify_before_measure_and_Pareto_semantics
+      - SOUP_owns_training_and_benchmark_measurement_semantics
+      - Hub_reads_executed_SOUP_benchmark_scores_without_fabricating_fitness
+      - local_v1_does_not_enable_Forge_distributed_workers
+      - campaigns_requiring_external_hostile_code_isolation_fail_closed
     desired_contract:
-      - Hub_may_orchestrate_Forge_campaigns_or_workers_as_components
+      - expand_to_distributed_campaigns_only_after_FG1_FG2_FG6_and_Hub_worker_contracts_are_qualified
       - Forge_does_not_reimplement_Hub_registry_workflow_or_artifact_control_plane
   Memorithm/SciCapsule:
     relationship: optional_packaging_for_reproducible_candidate_or_harness_inputs
@@ -183,6 +206,21 @@ roadmap:
         merge_commit: 1385c71a541419f15a558a5e94bc8a4a60567a4a
         required_CI: CI_156_success_on_final_exact_head
         note: does_not_promote_the_broader_FG4_phase_before_FG1_and_FG3_exit_gates
+      - id: FG4_SOUP_posttrain_process_runner_v1
+        status: complete
+        pull_request: 26
+        final_exact_head: dc3189591436da6e27734b2953e94eaad7057f1e
+        merge_commit: 9e1f3fc568c176f401735c121780d9fbe6834f5d
+        required_CI: CI_160_success_on_final_exact_head
+        note: local_process_contract_only_no_FG1_FG2_FG3_or_FG6_promotion
+      - id: FG4_SOUP_Hub_orchestration_edge_v1
+        status: complete
+        hub_capability: llm.optimize.forge_soup@1.0.0
+        hub_pull_request: 32
+        hub_final_exact_head: b2e96b674b3c93be8ed14b6ecc47b45cbc44c8fb
+        hub_merge_commit: 074cf2c6e00a0b142fe46d1558c8b32df9228859
+        hub_required_CI: CI_88_success_on_final_exact_head
+        note: local_orchestration_edge_only_distributed_trust_and_isolation_remain_open
     goals:
       - make_domain_plugin_contract_easy_to_consume_from_other_Rust_repositories
       - separate_candidate_generation_representation_verify_measure_and_objective_surfaces
@@ -202,7 +240,7 @@ roadmap:
       - deterministic_duplicate_and_retry_handling
       - bounded_parallel_dispatch
       - resumable_campaigns_without_double_counting_measurements
-      - Hub_integration_only_after_contracts_are_published
+      - distributed_Hub_integration_only_after_worker_trust_and_contracts_are_published
   - id: FG7
     name: Productization
     status: long_term
