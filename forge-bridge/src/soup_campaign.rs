@@ -99,9 +99,7 @@ impl SoupCampaignSpecV1 {
             ));
         }
         if self.engine.population == 0 || self.engine.population > MAX_POPULATION {
-            return Err(format!(
-                "engine.population must be in 1..={MAX_POPULATION}"
-            ));
+            return Err(format!("engine.population must be in 1..={MAX_POPULATION}"));
         }
         if self.engine.survivors == 0 || self.engine.survivors > self.engine.population {
             return Err("engine.survivors must be in 1..=engine.population".to_string());
@@ -135,13 +133,9 @@ pub fn run_soup_campaign<E: SoupEvaluator>(
             values: spec.baseline,
         },
     };
-    let domain = SoupPostTrainDomain::new(
-        spec.external_domain,
-        search,
-        evaluator,
-        isolation_available,
-    )
-    .map_err(|error| error.to_string())?;
+    let domain =
+        SoupPostTrainDomain::new(spec.external_domain, search, evaluator, isolation_available)
+            .map_err(|error| error.to_string())?;
 
     let report = Engine::new(
         domain,
@@ -367,7 +361,9 @@ mod tests {
             .filter_map(|(index, phase)| (phase == "measure").then_some(index))
         {
             assert!(
-                phases[..measure_index].iter().any(|phase| phase == "verify"),
+                phases[..measure_index]
+                    .iter()
+                    .any(|phase| phase == "verify"),
                 "measurement must never be the first evaluator phase"
             );
         }
