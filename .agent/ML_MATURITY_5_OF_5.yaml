@@ -1,7 +1,7 @@
 schema_version: 1
 kind: memorithm_ml_maturity_program
 status: active
-last_updated: "2026-08-31"
+last_updated: "2026-09-04"
 repository: Memorithm/forge
 objective: >-
   Raise Forge's contribution to ecosystem ML maturity to 5/5 as the trusted
@@ -19,6 +19,30 @@ score_policy:
     - LLM_score_as_fitness_without_execution
     - optimizing_only_microbenchmarks_when_task_quality_is_part_of_the_contract
     - sharing_persistent_cache_across_incompatible_hardware_or_toolchains
+verified_slices:
+  - id: SOUP_posttrain_process_runner_v1
+    status: complete
+    pull_request: 26
+    final_exact_head: dc3189591436da6e27734b2953e94eaad7057f1e
+    merge_commit: 9e1f3fc568c176f401735c121780d9fbe6834f5d
+    required_CI: CI_160_success_on_final_exact_head
+    domain_merge: 1385c71a541419f15a558a5e94bc8a4a60567a4a
+    scope: >-
+      Publishes a local process-friendly campaign runner for the existing SOUP
+      post-training domain while preserving verify-before-measure and executed
+      evidence. Distributed workers are disabled in this runner and external
+      hostile-code isolation is not claimed.
+  - id: SOUP_Hub_orchestration_edge_v1
+    status: complete
+    hub_pull_request: 32
+    hub_final_exact_head: b2e96b674b3c93be8ed14b6ecc47b45cbc44c8fb
+    hub_merge_commit: 074cf2c6e00a0b142fe46d1558c8b32df9228859
+    hub_capability: llm.optimize.forge_soup@1.0.0
+    scope: >-
+      SciRust Hub can orchestrate the local Forge SOUP runner with real SOUP
+      dry-run verification, training/benchmark measurement and immutable evidence
+      artifacts. This is not FGML1 candidate isolation, FGML2 distributed trusted
+      evaluation, or a production-promotion qualification gate.
 priority_program:
   - id: FGML0
     name: ML domain contracts
