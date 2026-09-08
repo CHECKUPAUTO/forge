@@ -23,8 +23,8 @@ pub use candidate_envelope::{
     CandidateEnvelopeError, CandidateEnvelopeV1, CANDIDATE_ENVELOPE_SCHEMA_VERSION,
 };
 pub use destination_requalification::{
-    destination_promotion_permit, DestinationPromotionPermitV1, DestinationRequalificationError,
-    DestinationRequalificationEvidenceV1,
+    destination_promotion_permit, DestinationPromotionPermitV1, DestinationQualificationBindingV1,
+    DestinationRequalificationError, DestinationRequalificationEvidenceV1,
 };
 pub use external_domain::{
     DataBoundaryV1, EnvironmentPolicyV1, ExternalDomainManifestError, ExternalDomainManifestV1,
