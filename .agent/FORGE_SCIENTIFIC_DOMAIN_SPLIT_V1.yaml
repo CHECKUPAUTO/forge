@@ -1,0 +1,34 @@
+schema_version: 1
+kind: forge_scientific_external_domain_split_record
+status: merged_verified
+recorded_at: "2026-09-08"
+repository: Memorithm/Forge
+main_merge_commit: 213a55790267566940c3e88e6a222a2a90d2f2e1
+pull_request: 28
+final_exact_head: 868c13803b86b5f7b0c0752b2c338342c19f530c
+required_ci:
+  workflow_run: 34173374084
+  workspace: success
+  nnis_adapter: success
+contract:
+  type: ScientificExternalDomainManifestV1
+  base_contract: ExternalDomainManifestV1
+  behavior:
+    - require_non_empty_generation_sources
+    - require_non_empty_verification_sources
+    - reject_generation_verification_source_overlap
+    - inherit_final_holdout_exclusion_from_base_manifest
+scope:
+  intended_for:
+    - scientific_external_domains
+    - future_TDI_ASSR_Forge_domains
+  does_not:
+    - authorize_final_holdout_access
+    - change_external_domain_v1_wire_semantics
+    - claim_scientific_novelty
+    - claim_performance_improvement
+roadmap_effect:
+  FG4: narrow_completed_scientific_domain_contract_slice
+  FG1: unchanged_active_priority
+  FG3: unchanged
+  broader_FG4_phase: not_promoted
