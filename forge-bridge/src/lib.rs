@@ -12,6 +12,7 @@ pub mod binpack_demo;
 pub mod candidate_envelope;
 pub mod external_domain;
 pub mod llm_ollama;
+pub mod scientific_domain;
 pub mod soup_campaign;
 pub mod soup_posttrain;
 
@@ -22,6 +23,10 @@ pub use external_domain::{
     DataBoundaryV1, EnvironmentPolicyV1, ExternalDomainManifestError, ExternalDomainManifestV1,
     ObjectiveDirection, ObjectiveSpecV1, UpstreamContractRefV1, VerificationBindingV1,
     EXTERNAL_DOMAIN_MANIFEST_SCHEMA_VERSION,
+};
+pub use scientific_domain::{
+    ScientificExternalDomainError, ScientificExternalDomainManifestV1,
+    SCIENTIFIC_EXTERNAL_DOMAIN_SCHEMA_VERSION,
 };
 
 pub type ForgeConfig = Config;
