@@ -30,8 +30,9 @@ pub use scientific_domain::{
     SCIENTIFIC_EXTERNAL_DOMAIN_SCHEMA_VERSION,
 };
 pub use scientific_domain_access::{
-    scientific_generation_view, scientific_verification_view, ScientificGenerationViewV1,
-    ScientificVerificationViewV1,
+    scientific_generation_view, scientific_measurement_permit, scientific_verification_view,
+    ScientificGenerationViewV1, ScientificMeasurementPermitV1, ScientificVerificationEvidenceError,
+    ScientificVerificationEvidenceV1, ScientificVerificationViewV1,
 };
 
 pub type ForgeConfig = Config;
