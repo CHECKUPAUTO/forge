@@ -170,7 +170,10 @@ mod tests {
             "beneficial",
             "harmful",
         ] {
-            assert!(!json.contains(forbidden), "leaked forbidden field: {forbidden}");
+            assert!(
+                !json.contains(forbidden),
+                "leaked forbidden field: {forbidden}"
+            );
         }
     }
 
