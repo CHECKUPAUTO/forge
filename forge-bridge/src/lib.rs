@@ -14,6 +14,7 @@ pub mod external_domain;
 pub mod llm_ollama;
 pub mod scientific_domain;
 pub mod scientific_domain_access;
+pub mod scientific_search_provenance;
 pub mod soup_campaign;
 pub mod soup_posttrain;
 
@@ -33,6 +34,10 @@ pub use scientific_domain_access::{
     scientific_generation_view, scientific_measurement_permit, scientific_verification_view,
     ScientificGenerationViewV1, ScientificMeasurementPermitV1, ScientificVerificationEvidenceError,
     ScientificVerificationEvidenceV1, ScientificVerificationViewV1,
+};
+pub use scientific_search_provenance::{
+    scientific_search_provenance, ScientificSearchDispositionV1, ScientificSearchProvenanceError,
+    ScientificSearchProvenanceV1,
 };
 
 pub type ForgeConfig = Config;
