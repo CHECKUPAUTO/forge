@@ -153,7 +153,9 @@ mod tests {
     fn disjoint_development_validation_and_holdout_sources_are_accepted() {
         let manifest = valid_manifest();
         assert_eq!(manifest.validate(), Ok(()));
-        let json = manifest.to_json().expect("valid scientific manifest serializes");
+        let json = manifest
+            .to_json()
+            .expect("valid scientific manifest serializes");
         assert!(json.contains("development-v1"));
         assert!(json.contains("validation-v1"));
         assert!(json.contains("confirmatory-v1"));
@@ -175,14 +177,22 @@ mod tests {
     #[test]
     fn scientific_campaign_requires_both_development_and_validation_sources() {
         let mut manifest = valid_manifest();
-        manifest.external_domain.data_boundary.generation_sources.clear();
+        manifest
+            .external_domain
+            .data_boundary
+            .generation_sources
+            .clear();
         assert_eq!(
             manifest.validate(),
             Err(ScientificExternalDomainError::NoGenerationSources)
         );
 
         let mut manifest = valid_manifest();
-        manifest.external_domain.data_boundary.verification_sources.clear();
+        manifest
+            .external_domain
+            .data_boundary
+            .verification_sources
+            .clear();
         assert_eq!(
             manifest.validate(),
             Err(ScientificExternalDomainError::NoVerificationSources)
