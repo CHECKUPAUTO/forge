@@ -4,6 +4,11 @@
 //! confirmatory source identities in one administrative record. Search/mutation
 //! code should not receive that whole record. These projections expose only the
 //! identities required by one phase and deliberately omit confirmatory sources.
+//!
+//! Verification evidence must bind the exact upstream contract and verifier
+//! identity before a measurement permit can be produced. The permit is a
+//! structural verify-before-measure capability; it is not a scientific verdict
+//! and never grants confirmatory/final-holdout access.
 
 use serde::{Deserialize, Serialize};
 
@@ -38,6 +43,83 @@ pub struct ScientificVerificationViewV1 {
     pub environment: EnvironmentPolicyV1,
 }
 
+/// Executed ordinary-verification evidence supplied before scientific measurement.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ScientificVerificationEvidenceV1 {
+    /// Exact upstream contract identity observed by the verifier.
+    pub upstream: UpstreamContractRefV1,
+    /// Exact verifier/oracle binding that produced the evidence.
+    pub verification: VerificationBindingV1,
+    /// Declared Validation source actually used for this verification.
+    pub verification_source: String,
+    /// Stable candidate identity verified by the adapter.
+    pub candidate_id: String,
+    /// Whether the prerequisite correctness/validity gate passed.
+    pub passed: bool,
+    /// Non-empty identity of the executed verification evidence.
+    pub evidence_id: String,
+    /// Executed environment identity when required by the domain policy.
+    pub environment_fingerprint: String,
+}
+
+/// Capability proving ordinary verification passed before measurement.
+///
+/// This value intentionally carries no Development or confirmatory source
+/// identities. Measurement code may require this capability but must still obey
+/// the objective/environment contract in the verification view.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ScientificMeasurementPermitV1 {
+    /// Exact upstream contract identity authorized for measurement.
+    pub upstream: UpstreamContractRefV1,
+    /// Exact verifier/oracle binding that passed.
+    pub verification: VerificationBindingV1,
+    /// Candidate identity covered by the verification evidence.
+    pub candidate_id: String,
+    /// Executed verification evidence identity establishing the prerequisite.
+    pub verification_evidence_id: String,
+    /// Environment fingerprint inherited from verification evidence.
+    pub environment_fingerprint: String,
+}
+
+/// Fail-closed reasons why ordinary scientific verification cannot authorize measurement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ScientificVerificationEvidenceError {
+    /// The source scientific manifest failed validation before capability projection.
+    InvalidManifest(ScientificExternalDomainError),
+    /// The verification capability does not contain a usable upstream identity.
+    MissingUpstreamIdentity,
+    /// The verification capability does not contain a usable verifier/oracle identity.
+    MissingVerificationBinding,
+    /// Executed evidence names a different upstream contract.
+    UpstreamIdentityMismatch,
+    /// Executed evidence names a different verifier/oracle binding.
+    VerificationBindingMismatch,
+    /// Evidence used a source outside the Validation-only capability.
+    UndeclaredVerificationSource { source: String },
+    /// Evidence does not identify the candidate it verified.
+    EmptyCandidateId,
+    /// Verification executed but did not pass the prerequisite gate.
+    VerificationFailed,
+    /// Verification passed without a stable executed-evidence identity.
+    EmptyEvidenceId,
+    /// The domain requires an environment fingerprint but evidence omitted it.
+    MissingEnvironmentFingerprint,
+}
+
+impl std::fmt::Display for ScientificVerificationEvidenceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{self:?}")
+    }
+}
+
+impl std::error::Error for ScientificVerificationEvidenceError {}
+
+impl From<ScientificExternalDomainError> for ScientificVerificationEvidenceError {
+    fn from(error: ScientificExternalDomainError) -> Self {
+        Self::InvalidManifest(error)
+    }
+}
+
 /// Project a validated scientific manifest into the generation/mutation capability.
 ///
 /// Validation and confirmatory source identities are intentionally absent.
@@ -68,6 +150,81 @@ pub fn scientific_verification_view(
         objectives: external.objectives.clone(),
         environment: external.environment,
     })
+}
+
+/// Validate executed verification evidence and mint a measurement capability.
+///
+/// Exact upstream and verifier/oracle identities must match the verification
+/// capability. Only a declared Validation source may be referenced, the
+/// prerequisite must have passed, and required environment provenance must be
+/// present. No metric value participates in this gate.
+pub fn scientific_measurement_permit(
+    view: &ScientificVerificationViewV1,
+    evidence: &ScientificVerificationEvidenceV1,
+) -> Result<ScientificMeasurementPermitV1, ScientificVerificationEvidenceError> {
+    if !usable_upstream_identity(&view.upstream) {
+        return Err(ScientificVerificationEvidenceError::MissingUpstreamIdentity);
+    }
+    if !usable_verification_binding(&view.verification) {
+        return Err(ScientificVerificationEvidenceError::MissingVerificationBinding);
+    }
+    if evidence.upstream != view.upstream {
+        return Err(ScientificVerificationEvidenceError::UpstreamIdentityMismatch);
+    }
+    if evidence.verification != view.verification {
+        return Err(ScientificVerificationEvidenceError::VerificationBindingMismatch);
+    }
+    if !view
+        .verification_sources
+        .iter()
+        .any(|source| source == &evidence.verification_source)
+    {
+        return Err(
+            ScientificVerificationEvidenceError::UndeclaredVerificationSource {
+                source: evidence.verification_source.clone(),
+            },
+        );
+    }
+    if evidence.candidate_id.trim().is_empty() {
+        return Err(ScientificVerificationEvidenceError::EmptyCandidateId);
+    }
+    if !evidence.passed {
+        return Err(ScientificVerificationEvidenceError::VerificationFailed);
+    }
+    if evidence.evidence_id.trim().is_empty() {
+        return Err(ScientificVerificationEvidenceError::EmptyEvidenceId);
+    }
+    if view.environment.fingerprint_required && evidence.environment_fingerprint.trim().is_empty() {
+        return Err(ScientificVerificationEvidenceError::MissingEnvironmentFingerprint);
+    }
+
+    Ok(ScientificMeasurementPermitV1 {
+        upstream: view.upstream.clone(),
+        verification: view.verification.clone(),
+        candidate_id: evidence.candidate_id.clone(),
+        verification_evidence_id: evidence.evidence_id.clone(),
+        environment_fingerprint: evidence.environment_fingerprint.clone(),
+    })
+}
+
+fn usable_upstream_identity(upstream: &UpstreamContractRefV1) -> bool {
+    !upstream.repository.trim().is_empty()
+        && matches!(upstream.commit_id.len(), 40 | 64)
+        && lower_hex(&upstream.commit_id)
+        && upstream.contract_sha256.len() == 64
+        && lower_hex(&upstream.contract_sha256)
+}
+
+fn usable_verification_binding(binding: &VerificationBindingV1) -> bool {
+    !binding.adapter_id.trim().is_empty()
+        && binding.adapter_sha256.len() == 64
+        && lower_hex(&binding.adapter_sha256)
+}
+
+fn lower_hex(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 #[cfg(test)]
@@ -115,6 +272,18 @@ mod tests {
         }
     }
 
+    fn evidence(view: &ScientificVerificationViewV1) -> ScientificVerificationEvidenceV1 {
+        ScientificVerificationEvidenceV1 {
+            upstream: view.upstream.clone(),
+            verification: view.verification.clone(),
+            verification_source: "validation-secret".to_string(),
+            candidate_id: "candidate:7".to_string(),
+            passed: true,
+            evidence_id: "verification:7".to_string(),
+            environment_fingerprint: "cpu=test;toolchain=test".to_string(),
+        }
+    }
+
     #[test]
     fn generation_view_cannot_serialize_validation_or_confirmatory_sources() {
         let view = scientific_generation_view(&manifest()).expect("valid manifest");
@@ -140,5 +309,91 @@ mod tests {
             vec!["development-secret".to_string()];
         assert!(scientific_generation_view(&invalid).is_err());
         assert!(scientific_verification_view(&invalid).is_err());
+    }
+
+    #[test]
+    fn exact_passed_verification_mints_measurement_permit() {
+        let view = scientific_verification_view(&manifest()).expect("verification view");
+        let evidence = evidence(&view);
+        let permit = scientific_measurement_permit(&view, &evidence).expect("measurement permit");
+        assert_eq!(permit.upstream, view.upstream);
+        assert_eq!(permit.verification, view.verification);
+        assert_eq!(permit.candidate_id, "candidate:7");
+        assert_eq!(permit.verification_evidence_id, "verification:7");
+    }
+
+    #[test]
+    fn mismatched_upstream_or_verifier_identity_fails_closed() {
+        let view = scientific_verification_view(&manifest()).expect("verification view");
+        let mut wrong_upstream = evidence(&view);
+        wrong_upstream.upstream.contract_sha256 = sha256('c');
+        assert_eq!(
+            scientific_measurement_permit(&view, &wrong_upstream),
+            Err(ScientificVerificationEvidenceError::UpstreamIdentityMismatch)
+        );
+
+        let mut wrong_verifier = evidence(&view);
+        wrong_verifier.verification.adapter_sha256 = sha256('d');
+        assert_eq!(
+            scientific_measurement_permit(&view, &wrong_verifier),
+            Err(ScientificVerificationEvidenceError::VerificationBindingMismatch)
+        );
+    }
+
+    #[test]
+    fn development_or_confirmatory_source_cannot_authorize_measurement() {
+        let view = scientific_verification_view(&manifest()).expect("verification view");
+        for forbidden in ["development-secret", "confirmatory-secret"] {
+            let mut forbidden_evidence = evidence(&view);
+            forbidden_evidence.verification_source = forbidden.to_string();
+            assert_eq!(
+                scientific_measurement_permit(&view, &forbidden_evidence),
+                Err(
+                    ScientificVerificationEvidenceError::UndeclaredVerificationSource {
+                        source: forbidden.to_string(),
+                    }
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn failed_or_unidentified_verification_cannot_authorize_measurement() {
+        let view = scientific_verification_view(&manifest()).expect("verification view");
+        let mut failed = evidence(&view);
+        failed.passed = false;
+        assert_eq!(
+            scientific_measurement_permit(&view, &failed),
+            Err(ScientificVerificationEvidenceError::VerificationFailed)
+        );
+
+        let mut unidentified = evidence(&view);
+        unidentified.evidence_id.clear();
+        assert_eq!(
+            scientific_measurement_permit(&view, &unidentified),
+            Err(ScientificVerificationEvidenceError::EmptyEvidenceId)
+        );
+    }
+
+    #[test]
+    fn required_environment_fingerprint_cannot_be_omitted() {
+        let view = scientific_verification_view(&manifest()).expect("verification view");
+        let mut missing = evidence(&view);
+        missing.environment_fingerprint.clear();
+        assert_eq!(
+            scientific_measurement_permit(&view, &missing),
+            Err(ScientificVerificationEvidenceError::MissingEnvironmentFingerprint)
+        );
+    }
+
+    #[test]
+    fn forged_empty_verifier_capability_fails_closed() {
+        let mut view = scientific_verification_view(&manifest()).expect("verification view");
+        view.verification.adapter_id.clear();
+        let evidence = evidence(&view);
+        assert_eq!(
+            scientific_measurement_permit(&view, &evidence),
+            Err(ScientificVerificationEvidenceError::MissingVerificationBinding)
+        );
     }
 }
