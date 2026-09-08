@@ -1,0 +1,29 @@
+name: Rustfmt diagnostic
+
+on:
+  push:
+    branches:
+      - research/scientific-domain-access-views
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply workspace rustfmt
+        run: cargo fmt --all
+      - name: Collect formatted files
+        run: |
+          mkdir -p /tmp/rustfmt-output/forge-bridge/src
+          cp forge-bridge/src/scientific_domain_access.rs /tmp/rustfmt-output/forge-bridge/src/
+          cp forge-bridge/src/lib.rs /tmp/rustfmt-output/forge-bridge/src/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-output
+          path: /tmp/rustfmt-output
