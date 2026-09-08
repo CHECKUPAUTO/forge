@@ -99,7 +99,8 @@ impl ScientificExternalDomainManifestV1 {
     /// Serialize only a validated scientific-domain manifest.
     pub fn to_json(&self) -> Result<String, ScientificExternalDomainError> {
         self.validate()?;
-        serde_json::to_string(self).map_err(|error| ScientificExternalDomainError::Json(error.to_string()))
+        serde_json::to_string(self)
+            .map_err(|error| ScientificExternalDomainError::Json(error.to_string()))
     }
 }
 
