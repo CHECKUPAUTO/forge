@@ -66,7 +66,7 @@ pub fn scientific_verification_view(
         verification: external.verification.clone(),
         verification_sources: external.data_boundary.verification_sources.clone(),
         objectives: external.objectives.clone(),
-        environment: external.environment.clone(),
+        environment: external.environment,
     })
 }
 
