@@ -10,6 +10,7 @@ use tracing::info;
 
 pub mod binpack_demo;
 pub mod candidate_envelope;
+pub mod destination_requalification;
 pub mod external_domain;
 pub mod llm_ollama;
 pub mod scientific_domain;
@@ -20,6 +21,10 @@ pub mod soup_posttrain;
 
 pub use candidate_envelope::{
     CandidateEnvelopeError, CandidateEnvelopeV1, CANDIDATE_ENVELOPE_SCHEMA_VERSION,
+};
+pub use destination_requalification::{
+    destination_promotion_permit, DestinationPromotionPermitV1, DestinationRequalificationError,
+    DestinationRequalificationEvidenceV1,
 };
 pub use external_domain::{
     DataBoundaryV1, EnvironmentPolicyV1, ExternalDomainManifestError, ExternalDomainManifestV1,
