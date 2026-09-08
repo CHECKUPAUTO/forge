@@ -104,3 +104,27 @@ impl<T: Candidate> From<&T> for CandidateDto {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use binpack_demo::BinPacking;
+
+    #[test]
+    fn forge_bridge_compiles_and_runs_binpack() {
+        let cfg = ForgeConfig {
+            generations: 3,
+            population: 8,
+            survivors: 2,
+            base_seed: 1,
+            worker_addresses: None,
+        };
+        let domain = BinPacking {
+            capacity: 1.0,
+            n_items: 20,
+            n_instances: 5,
+        };
+        let report = ForgeCampaign::new(cfg, domain).run();
+        assert!(!report.history.is_empty(), "doit produire un historique");
+    }
+}
