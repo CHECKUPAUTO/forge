@@ -13,6 +13,7 @@ pub mod candidate_envelope;
 pub mod external_domain;
 pub mod llm_ollama;
 pub mod scientific_domain;
+pub mod scientific_domain_access;
 pub mod soup_campaign;
 pub mod soup_posttrain;
 
@@ -27,6 +28,10 @@ pub use external_domain::{
 pub use scientific_domain::{
     ScientificExternalDomainError, ScientificExternalDomainManifestV1,
     SCIENTIFIC_EXTERNAL_DOMAIN_SCHEMA_VERSION,
+};
+pub use scientific_domain_access::{
+    scientific_generation_view, scientific_verification_view, ScientificGenerationViewV1,
+    ScientificVerificationViewV1,
 };
 
 pub type ForgeConfig = Config;
