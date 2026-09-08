@@ -74,8 +74,8 @@ pub fn scientific_verification_view(
 mod tests {
     use super::*;
     use crate::{
-        DataBoundaryV1, EXTERNAL_DOMAIN_MANIFEST_SCHEMA_VERSION, ExternalDomainManifestV1,
-        ObjectiveDirection, SCIENTIFIC_EXTERNAL_DOMAIN_SCHEMA_VERSION,
+        DataBoundaryV1, ExternalDomainManifestV1, ObjectiveDirection,
+        EXTERNAL_DOMAIN_MANIFEST_SCHEMA_VERSION, SCIENTIFIC_EXTERNAL_DOMAIN_SCHEMA_VERSION,
     };
 
     fn sha256(fill: char) -> String {
@@ -136,10 +136,8 @@ mod tests {
     #[test]
     fn projections_fail_closed_when_manifest_is_invalid() {
         let mut invalid = manifest();
-        invalid
-            .external_domain
-            .data_boundary
-            .verification_sources = vec!["development-secret".to_string()];
+        invalid.external_domain.data_boundary.verification_sources =
+            vec!["development-secret".to_string()];
         assert!(scientific_generation_view(&invalid).is_err());
         assert!(scientific_verification_view(&invalid).is_err());
     }
