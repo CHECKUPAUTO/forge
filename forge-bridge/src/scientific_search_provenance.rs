@@ -7,9 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ScientificMeasurementPermitV1, UpstreamContractRefV1, VerificationBindingV1,
-};
+use crate::{ScientificMeasurementPermitV1, UpstreamContractRefV1, VerificationBindingV1};
 
 /// Forge-local disposition of one verified candidate in an ordinary search run.
 ///
